@@ -1,4 +1,4 @@
-# claude-config
+# oneshot-pipeline
 
 Portable Claude Code skills, a PR wave-fixer agent and helper scripts.
 

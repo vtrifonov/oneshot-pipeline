@@ -13,7 +13,7 @@ items. External capabilities below remain prerequisites.
 
 For standalone sharing without repository access:
 
-From the claude-config repository:
+From the repository root:
 
 ```sh
 python3 bin/package-oneshot.py /tmp/oneshot-pipeline.tar.gz
