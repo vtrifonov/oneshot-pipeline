@@ -1,0 +1,75 @@
+#!/bin/bash
+# pr-thread-close <pr> <commentDatabaseId> <sha> "<message>" [--repo owner/name] [--no-reply]
+#
+# One call for the four bookkeeping steps per finding: reply to the review
+# comment (referencing the fixing commit), find the thread that comment
+# starts, resolve it, re-query and print the resulting isResolved. Exit 0 only
+# when GitHub confirms the thread is resolved.
+#
+# Writes to GitHub: one reply comment and one resolve. Both are reversible in
+# the PR UI. Never touches code, never pushes.
+
+set -o pipefail
+
+PR=""; CID=""; SHA=""; MSG=""; REPO=""; REPLY=1
+pos=()
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --repo) REPO="$2"; shift 2 ;;
+        --no-reply) REPLY=0; shift ;;
+        -h|--help) sed -n '2,10p' "$0"; exit 0 ;;
+        *) pos+=("$1"); shift ;;
+    esac
+done
+PR=${pos[0]}; CID=${pos[1]}; SHA=${pos[2]}; MSG=${pos[3]}
+if [ -z "$PR" ] || [ -z "$CID" ] || { [ "$REPLY" = 1 ] && { [ -z "$SHA" ] || [ -z "$MSG" ]; }; }; then
+    echo 'usage: pr-thread-close <pr> <commentDatabaseId> <sha> "<message>" [--repo owner/name] [--no-reply]' >&2; exit 64
+fi
+# shellcheck source=lib/resolve-pr-repo.sh
+. "$(dirname "$(readlink -f "$0")")/lib/resolve-pr-repo.sh"
+REPO=$(resolve_pr_repo pr-thread-close "$PR" "$REPO") || exit 64
+OWNER=${REPO%/*}; NAME=${REPO#*/}
+
+find_thread() {
+    # Thread whose FIRST comment has this databaseId; paginate past 100.
+    local cursor="" after="" page hit
+    while :; do
+        [ -n "$cursor" ] && after=", after: \"$cursor\""
+        page=$(gh api graphql -f query="
+        query { repository(owner: \"$OWNER\", name: \"$NAME\") { pullRequest(number: $PR) {
+          reviewThreads(first: 100$after) {
+            pageInfo { hasNextPage endCursor }
+            nodes { id isResolved comments(first: 1) { nodes { databaseId } } }
+          } } } }") || return 1
+        hit=$(printf '%s' "$page" | jq -r --argjson cid "$CID" '.data.repository.pullRequest.reviewThreads.nodes[] | select(.comments.nodes[0].databaseId == $cid) | "\(.id) \(.isResolved)"')
+        if [ -n "$hit" ]; then printf '%s\n' "$hit"; return 0; fi
+        if [ "$(printf '%s' "$page" | jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage')" != "true" ]; then return 2; fi
+        cursor=$(printf '%s' "$page" | jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.endCursor')
+    done
+}
+
+HIT=$(find_thread); rc=$?
+if [ $rc = 2 ] || [ -z "$HIT" ]; then echo "pr-thread-close: no thread starts with comment $CID on PR #$PR" >&2; exit 3; fi
+[ $rc != 0 ] && { echo "pr-thread-close: GraphQL query failed" >&2; exit 1; }
+TID=${HIT% *}; WAS=${HIT#* }
+
+if [ "$REPLY" = 1 ]; then
+    body="$MSG"
+    case "$body" in *"$SHA"*) ;; *) body="$body
+
+Fixed in $SHA." ;; esac
+    gh api "repos/$REPO/pulls/$PR/comments/$CID/replies" -f body="$body" --jq '.id' >/dev/null \
+        || { echo "pr-thread-close: reply failed for comment $CID" >&2; exit 1; }
+    echo "replied to $CID"
+fi
+
+if [ "$WAS" = "true" ]; then
+    echo "thread $TID was already resolved"
+else
+    gh api graphql -f query="mutation { resolveReviewThread(input:{threadId:\"$TID\"}) { thread { isResolved } } }" >/dev/null \
+        || { echo "pr-thread-close: resolve failed for thread $TID" >&2; exit 1; }
+fi
+
+NOW=$(find_thread); NOW=${NOW#* }
+echo "thread $TID isResolved=$NOW"
+[ "$NOW" = "true" ]

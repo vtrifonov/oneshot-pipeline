@@ -1,0 +1,30 @@
+.DS_Store
+
+# Editor / tooling backups produced in place
+*.bak
+*.bak-*
+*.backup
+*.backup.*
+*.before-*
+*.pre-split-*
+*.hub-backup-*
+*.orig
+*.tmp
+*~
+
+# Per-machine run data — every pipeline run appends to it
+metrics.csv
+review-runs.jsonl
+review-ledger.jsonl
+/skills/oneshot-pipeline/runs/
+
+# Runtime adapter files holding employer-specific values
+**/repository-adapter.local.md
+*.local.json
+.env
+.env.*
+
+# 2026-09-17: the deny-list that used to sit here is gone. The repo is private and
+# personal, and every skill, agent and command in it is tracked on purpose. What
+# stays out is credentials, customer data, per-machine run data and backups — the
+# rules above, which are about content, not about which customisation it belongs to.

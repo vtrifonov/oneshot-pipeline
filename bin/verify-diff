@@ -1,0 +1,180 @@
+#!/bin/bash
+# verify-diff [--since REF] [--files f1 f2 ...] [--dry-run] [--no-tests] [--no-tsc] [--no-lint] [--related]
+#
+# One call, one summary, instead of the 5-6 sequential turns (tsc, tsc again
+# for another scope, eslint, vitest, vitest browser) an agent spends after
+# every fix. Scoped to what changed:
+#   tsc     -p every tsconfig.json that owns a changed .ts/.tsx (nearest one
+#           walking up from the file; the root config excludes apps/ and
+#           packages/, so those get their own run). Reports the error total
+#           and the errors that sit in CHANGED files separately — a stale
+#           workspace dist or a package with a non-zero baseline must not read
+#           as your regression.
+#   eslint  changed .ts/.tsx/.js/.mjs files only
+#   vitest  changed test files + tests co-located with changed sources + tests
+#           that import a changed source (basename grep). *.test.tsx run under
+#           vitest.config.browser.ts (npm test never runs them). --related swaps
+#           this for vitest's transitive `related` set — on a hub file that is
+#           500+ files, so it is opt-in.
+#
+# Default change set: working tree vs HEAD (staged + unstaged + untracked).
+# --since REF compares REF...HEAD instead (e.g. origin/main).
+# Exit 0 only when every stage is clean. Never runs a full suite (the
+# block-full-suite hook would reject it anyway).
+
+set -o pipefail
+cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)" || exit 1
+
+SINCE=""; DRY=0; TESTS=1; TSC=1; LINT=1; RELATED=0; FILES=()
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --since) SINCE="$2"; shift 2 ;;
+        --files) shift; while [ $# -gt 0 ] && [ "${1#--}" = "$1" ]; do FILES+=("$1"); shift; done ;;
+        --dry-run) DRY=1; shift ;;
+        --no-tests) TESTS=0; shift ;;
+        --no-tsc) TSC=0; shift ;;
+        --no-lint) LINT=0; shift ;;
+        --related) RELATED=1; shift ;;
+        -h|--help) sed -n '2,22p' "$0"; exit 0 ;;
+        *) FILES+=("$1"); shift ;;
+    esac
+done
+
+if [ ${#FILES[@]} -eq 0 ]; then
+    if [ -n "$SINCE" ]; then
+        list=$(git diff --name-only --diff-filter=ACMR "$SINCE...HEAD")
+    else
+        list=$({ git diff --name-only --diff-filter=ACMR HEAD; git ls-files --others --exclude-standard; } | sort -u)
+    fi
+    while IFS= read -r f; do [ -n "$f" ] && FILES+=("$f"); done <<< "$list"
+fi
+# Keep only source-ish files that still exist.
+SRC=(); TESTFILES=(); LINTABLE=()
+for f in "${FILES[@]}"; do
+    [ -f "$f" ] || continue
+    case "$f" in
+        */node_modules/*|*/dist/*|*/.next/*) continue ;;
+        *.test.ts|*.test.tsx|*.test.mjs|*.test-d.ts|*.spec.ts) TESTFILES+=("$f"); LINTABLE+=("$f") ;;
+        *.ts|*.tsx) SRC+=("$f"); LINTABLE+=("$f") ;;
+        *.js|*.jsx|*.mjs) SRC+=("$f"); LINTABLE+=("$f") ;;
+    esac
+done
+if [ ${#SRC[@]} -eq 0 ] && [ ${#TESTFILES[@]} -eq 0 ]; then
+    echo "verify-diff: no changed source or test files (${#FILES[@]} changed paths, none .ts/.tsx/.js/.mjs)"; exit 0
+fi
+echo "verify-diff: ${#SRC[@]} source, ${#TESTFILES[@]} test file(s) changed"
+
+nearest_tsconfig() {
+    local d; d=$(dirname "$1")
+    while :; do
+        [ -f "$d/tsconfig.json" ] && { echo "$d/tsconfig.json"; return; }
+        [ "$d" = "." ] || [ "$d" = "/" ] && return
+        d=$(dirname "$d")
+    done
+}
+# bash 3.2 on macOS has no associative arrays: collect, then sort -u.
+CFG_LIST=""
+for f in "${SRC[@]}" "${TESTFILES[@]}"; do
+    case "$f" in *.ts|*.tsx) c=$(nearest_tsconfig "$f"); [ -n "$c" ] && CFG_LIST="$CFG_LIST$c
+" ;; esac
+done
+CFGS=()
+while IFS= read -r c; do [ -n "$c" ] && CFGS+=("$c"); done <<< "$(printf '%s' "$CFG_LIST" | sort -u)"
+
+run() { # run <label> <cmd...>  — prints the command in dry-run, else runs with a 5-minute cap
+    local label="$1"; shift
+    if [ "$DRY" = 1 ]; then echo "[dry-run] $label: $*"; return 0; fi
+    timeout 300 "$@"
+}
+
+FAIL=0
+CHANGED_RE=$(printf '%s\n' "${SRC[@]}" "${TESTFILES[@]}" | sed 's/[.[\*^$]/\\&/g' | paste -sd'|' -)
+
+if [ "$TSC" = 1 ] && [ ${#CFGS[@]} -gt 0 ]; then
+    for cfg in "${CFGS[@]}"; do
+        if [ "$DRY" = 1 ]; then run "tsc" npx tsc --noEmit -p "$cfg"; continue; fi
+        out=$(timeout 300 npx tsc --noEmit -p "$cfg" 2>&1); rc=$?
+        total=$(printf '%s\n' "$out" | grep -cE '\): error TS')
+        mine=$(printf '%s\n' "$out" | grep -E '\): error TS' | grep -E "^($CHANGED_RE)\(" || true)
+        n_mine=$(printf '%s' "$mine" | grep -c . )
+        if [ "$rc" = 124 ]; then echo "tsc $cfg: TIMEOUT (300s) — cache contention? rm the tsbuildinfo and retry"; FAIL=1
+        elif [ "$n_mine" -gt 0 ]; then echo "tsc $cfg: $total error(s), $n_mine in changed files:"; printf '%s\n' "$mine" | sed 's/^/  /'; FAIL=1
+        elif [ "$total" -gt 0 ]; then echo "tsc $cfg: $total pre-existing error(s), none in changed files (ok)"
+        else echo "tsc $cfg: clean"; fi
+    done
+fi
+
+if [ "$LINT" = 1 ] && [ ${#LINTABLE[@]} -gt 0 ]; then
+    if [ "$DRY" = 1 ]; then run "eslint" npx eslint --quiet "${LINTABLE[@]}"
+    else
+        out=$(timeout 300 npx eslint --quiet "${LINTABLE[@]}" 2>&1); rc=$?
+        if [ "$rc" = 0 ]; then echo "eslint: clean (${#LINTABLE[@]} files)"; else echo "eslint: problems:"; printf '%s\n' "$out" | grep -vE '^\s*$' | head -40 | sed 's/^/  /'; FAIL=1; fi
+    fi
+fi
+
+if [ "$TESTS" = 1 ]; then
+    # Select tests directly: changed test files, tests co-located with changed
+    # sources, and tests that import a changed source by basename. Transitive
+    # `vitest related` is opt-in (--related): on a hub file like lib/errors.ts
+    # it selects 500+ files, i.e. the full suite CI already runs.
+    SEARCH="grep"; command -v rg >/dev/null 2>&1 && SEARCH="rg"
+    importers_of() {
+        local base; base=$(basename "$1"); base=${base%.*}
+        local pat="from ['\"][^'\"]*/${base}(\\.js|\\.ts|\\.tsx|\\.mjs)?['\"]"
+        if [ "$SEARCH" = rg ]; then
+            rg -l --glob '*.test.ts' --glob '*.test.tsx' --glob '*.test.mjs' -e "$pat" . 2>/dev/null | sed 's|^\./||'
+        else
+            grep -rlE --include='*.test.ts' --include='*.test.tsx' --include='*.test.mjs' --exclude-dir=node_modules --exclude-dir=dist --exclude-dir=.next -e "$pat" . 2>/dev/null | sed 's|^\./||'
+        fi
+    }
+    colocated_of() {
+        local base dir; base=$(basename "$1"); base=${base%.*}; dir=$(dirname "$1")
+        ls "$dir/__tests__/$base".test.ts "$dir/__tests__/$base".test.tsx "$dir/$base".test.ts "$dir/$base".test.tsx 2>/dev/null
+    }
+    SELECTED=""
+    for t in "${TESTFILES[@]}"; do case "$t" in *.test-d.ts) ;; *) SELECTED="$SELECTED$t
+" ;; esac; done
+    if [ "$RELATED" = 0 ]; then
+        for src in "${SRC[@]}"; do
+            SELECTED="$SELECTED$(colocated_of "$src")
+$(importers_of "$src")
+"
+        done
+    fi
+    unit_tests=(); browser_tests=()
+    while IFS= read -r t; do
+        [ -n "$t" ] && [ -f "$t" ] || continue
+        case "$t" in *.test.tsx) browser_tests+=("$t") ;; *) unit_tests+=("$t") ;; esac
+    done <<< "$(printf '%s' "$SELECTED" | sort -u)"
+
+    run_vitest() { # run_vitest <label> <config-or-empty> <mode:run|related> <files...>
+        local label="$1" cfg="$2" mode="$3"; shift 3
+        [ $# -eq 0 ] && return 0
+        local args=()
+        if [ "$mode" = related ]; then args=(related "$@" --run); else args=(run "$@"); fi
+        args+=(--passWithNoTests --reporter=dot)
+        [ -n "$cfg" ] && args+=(--config "$cfg")
+        if [ "$DRY" = 1 ]; then run "vitest($label)" env CI=true npx vitest "${args[@]}"; return 0; fi
+        out=$(CI=true timeout 300 npx vitest "${args[@]}" 2>&1); rc=$?
+        summary=$(printf '%s\n' "$out" | sed -E 's/\x1b\[[0-9;]*m//g' | grep -E '^\s*(Test Files|Tests)\s' | sed -E 's/^\s+//' | paste -sd' · ' -)
+        if [ "$rc" = 124 ]; then echo "vitest($label): TIMEOUT (300s) with $# file(s) — narrow the set or let CI run it"; FAIL=1
+        elif [ "$rc" = 0 ]; then echo "vitest($label): ${summary:-no tests matched} [$# file(s)]"
+        else echo "vitest($label): FAILED — ${summary:-see output}"; printf '%s\n' "$out" | sed -E 's/\x1b\[[0-9;]*m//g' | grep -E 'FAIL|✗|×|AssertionError|Error:|expected|received|Unknown option' | head -40 | sed 's/^/  /'; FAIL=1; fi
+    }
+    if [ "$RELATED" = 1 ]; then
+        run_vitest unit "" related "${SRC[@]}" "${unit_tests[@]}"
+        tsx_src=0; for s in "${SRC[@]}"; do case "$s" in *.tsx) tsx_src=1 ;; esac; done
+        if [ -f vitest.config.browser.ts ] && { [ "$tsx_src" = 1 ] || [ ${#browser_tests[@]} -gt 0 ]; }; then
+            run_vitest browser vitest.config.browser.ts related "${SRC[@]}" "${browser_tests[@]}"
+        fi
+    else
+        [ ${#unit_tests[@]} -gt 40 ] && echo "vitest(unit): ${#unit_tests[@]} files selected — a hub file changed; this is close to a full run"
+        run_vitest unit "" run "${unit_tests[@]}"
+        [ -f vitest.config.browser.ts ] && run_vitest browser vitest.config.browser.ts run "${browser_tests[@]}"
+        [ ${#unit_tests[@]} -eq 0 ] && [ ${#browser_tests[@]} -eq 0 ] && echo "vitest: no test selected for the changed files — add one, or pass --related for the transitive set"
+    fi
+fi
+
+if [ "$DRY" = 1 ]; then exit 0; fi
+if [ "$FAIL" = 0 ]; then echo "verify-diff: ALL CLEAN"; else echo "verify-diff: FAILURES above"; fi
+exit $FAIL

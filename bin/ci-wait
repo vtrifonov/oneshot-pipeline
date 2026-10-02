@@ -1,0 +1,60 @@
+#!/bin/bash
+# ci-wait <pr> [--max SECONDS] [--interval SECONDS] [--review-check REGEX] [--repo owner/name]
+#
+# One blocking call instead of a dozen poll turns per CI round. Returns as soon
+# as ANY of these holds:
+#   exit 0  the review-bot check passed (configured with CI_REVIEW_CHECK) — go
+#           read the threads now, do not wait for slower jobs
+#   exit 0  every check has settled (optional configured exclusions)
+#   exit 1  a check failed or was cancelled (named on stdout)
+#   exit 2  --max reached (default 240s)
+# Prints only state transitions, never a repeated "still waiting".
+#
+# No checks are excluded by default. Configure CI_EXCLUDE_CHECKS only for non-gating checks.
+
+set -o pipefail
+
+PR=""; MAX=240; INTERVAL=30; REVIEW=${CI_REVIEW_CHECK:-'^$'}; REPO=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --max) MAX="$2"; shift 2 ;;
+        --interval) INTERVAL="$2"; shift 2 ;;
+        --review-check) REVIEW="$2"; shift 2 ;;
+        --repo) REPO="$2"; shift 2 ;;
+        -h|--help) sed -n '2,14p' "$0"; exit 0 ;;
+        *) PR="$1"; shift ;;
+    esac
+done
+[ -z "$PR" ] && { echo "usage: ci-wait <pr> [--max S] [--interval S] [--review-check REGEX] [--repo owner/name]" >&2; exit 64; }
+# shellcheck source=lib/resolve-pr-repo.sh
+. "$(dirname "$(readlink -f "$0")")/lib/resolve-pr-repo.sh"
+REPO=$(resolve_pr_repo ci-wait "$PR" "$REPO") || exit 64
+REPOFLAG=(--repo "$REPO")
+
+EXCLUDE=${CI_EXCLUDE_CHECKS:-'^$'}
+start=$(date +%s); prev=""
+while :; do
+    # bucket is one of pass|fail|pending|skipping|cancel. Never read
+    # `conclusion`: gh returns "" for in-progress and a poller reads it as settled.
+    raw=$(gh pr checks "$PR" "${REPOFLAG[@]}" --json name,bucket 2>/dev/null)
+    if [ -z "$raw" ] || [ "$raw" = "[]" ]; then
+        snap="no checks reported yet"
+    else
+        snap=$(printf '%s' "$raw" | jq -r --arg ex "$EXCLUDE" '[.[] | select(.name | test($ex) | not)] | sort_by(.name) | .[] | "\(.bucket) \(.name)"')
+    fi
+    if [ "$snap" != "$prev" ]; then
+        echo "[$(date +%H:%M:%S)] +$(( $(date +%s) - start ))s"
+        printf '%s\n' "$snap" | sed 's/^/  /'
+        prev="$snap"
+    fi
+    if [ -n "$raw" ] && [ "$raw" != "[]" ]; then
+        failed=$(printf '%s' "$raw" | jq -r --arg ex "$EXCLUDE" '.[] | select(.name | test($ex) | not) | select(.bucket=="fail" or .bucket=="cancel") | .name')
+        if [ -n "$failed" ]; then echo "FAILED:"; printf '%s\n' "$failed" | sed 's/^/  /'; exit 1; fi
+        review_pass=$(printf '%s' "$raw" | jq -r --arg re "$REVIEW" '.[] | select(.name | test($re)) | select(.bucket=="pass") | .name' | head -1)
+        if [ -n "$review_pass" ]; then echo "REVIEW CHECK PASSED: $review_pass — query review threads now (pr-threads $PR)"; exit 0; fi
+        pending=$(printf '%s' "$raw" | jq -r --arg ex "$EXCLUDE" '[.[] | select(.name | test($ex) | not) | select(.bucket=="pending")] | length')
+        if [ "$pending" = 0 ]; then echo "ALL CHECKS SETTLED (configured exclusions applied)"; exit 0; fi
+    fi
+    if [ $(( $(date +%s) - start )) -ge "$MAX" ]; then echo "TIMEOUT after ${MAX}s — still pending; call ci-wait again"; exit 2; fi
+    sleep "$INTERVAL"
+done

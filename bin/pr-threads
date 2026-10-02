@@ -1,0 +1,140 @@
+#!/bin/bash
+# pr-threads <pr> [--repo owner/name] [--all] [--context N] [--no-tests] [--reviews]
+#
+# One call that replaces the 10-12 discovery turns an agent spends per review
+# finding: every unresolved review thread (paginated past GitHub's silent
+# 100-node cap), full first-comment body, the anchored file excerpt from the
+# current worktree, and the test files that import the anchored file.
+#
+# --reviews also lists the AI reviewer's reviews on the CURRENT HEAD that are
+# not the approval decision: findings filed in a review BODY (state
+# CHANGES_REQUESTED / COMMENTED) have no thread and are invisible to the
+# thread count — an earlier review was declared merge-ready with 0 threads and a
+# CHANGES_REQUESTED body finding.
+#
+# Read-only. Run from inside the checkout whose files you want excerpted.
+# Output is markdown; feed it straight into a fix brief.
+
+set -o pipefail
+
+PR=""; REPO=""; ALL=0; CTX=20; TESTS=1; REVIEWS=0
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --repo) REPO="$2"; shift 2 ;;
+        --all) ALL=1; shift ;;
+        --context) CTX="$2"; shift 2 ;;
+        --no-tests) TESTS=0; shift ;;
+        --reviews) REVIEWS=1; shift ;;
+        -h|--help) sed -n '2,15p' "$0"; exit 0 ;;
+        *) PR="$1"; shift ;;
+    esac
+done
+[ -z "$PR" ] && { echo "usage: pr-threads <pr> [--repo owner/name] [--all] [--context N] [--no-tests] [--reviews]" >&2; exit 64; }
+# shellcheck source=lib/resolve-pr-repo.sh
+. "$(dirname "$(readlink -f "$0")")/lib/resolve-pr-repo.sh"
+REPO=$(resolve_pr_repo pr-threads "$PR" "$REPO") || exit 64
+OWNER=${REPO%/*}; NAME=${REPO#*/}
+
+# Paginate reviewThreads. GitHub returns at most 100 per page and never warns.
+fetch_threads() {
+    local cursor="" after="" page
+    while :; do
+        [ -n "$cursor" ] && after=", after: \"$cursor\""
+        page=$(gh api graphql -f query="
+        query { repository(owner: \"$OWNER\", name: \"$NAME\") { pullRequest(number: $PR) {
+          reviewThreads(first: 100$after) {
+            pageInfo { hasNextPage endCursor }
+            nodes { id isResolved isOutdated path line originalLine
+              comments(first: 50) { totalCount nodes { databaseId author { login } createdAt body } } }
+          } } } }") || return 1
+        printf '%s\n' "$page" | jq -c '.data.repository.pullRequest.reviewThreads.nodes[]'
+        if [ "$(printf '%s' "$page" | jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage')" != "true" ]; then break; fi
+        cursor=$(printf '%s' "$page" | jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.endCursor')
+    done
+}
+
+covering_tests() {
+    # Tests that import the anchored file: co-located __tests__/<name>.test.*
+    # plus any test whose import specifier ends in the file's basename.
+    local path="$1" base dir
+    base=$(basename "$path"); base=${base%.*}; dir=$(dirname "$path")
+    {
+        ls "$dir/__tests__/$base".test.* "$dir/$base".test.* 2>/dev/null
+        grep -rlE --include='*.test.ts' --include='*.test.tsx' --include='*.test.mjs' \
+            "from ['\"][^'\"]*/${base}(\.js|\.ts|\.tsx|\.mjs)?['\"]" \
+            lib app apps components packages functions scripts tests 2>/dev/null
+    } | sort -u
+}
+
+review_body_findings() {
+    # Bot reviews on the current head, minus the approval-decision review.
+    local head reviews
+    head=$(gh pr view "$PR" --repo "$REPO" --json headRefOid --jq .headRefOid 2>/dev/null)
+    reviews=$(gh api "repos/$REPO/pulls/$PR/reviews" --paginate 2>/dev/null \
+        | jq -c --arg head "$head" --arg bot "${AI_REVIEW_BOT:-}" '.[] | select(($bot=="" or .user.login==$bot) and .commit_id==$head and .state!="DISMISSED" and (.body|length)>0) | select(.body | test("ai-review:approval") | not)')
+    echo "# Review-body findings on head ${head:0:8} (no thread — not counted above)"
+    echo
+    echo "An engine review body SUMMARISES the inline threads listed above. A body is an item only for a defect no thread on this head anchors; otherwise it is a duplicate, not a second finding."
+    echo
+    if [ -z "$reviews" ]; then echo "(none: no bot review on this head yet, or only the approval decision)"; echo; return; fi
+    printf '%s\n' "$reviews" | while IFS= read -r r; do
+        [ -z "$r" ] && continue
+        echo "## $(printf '%s' "$r" | jq -r '.state') · $(printf '%s' "$r" | jq -r '.submitted_at') · review $(printf '%s' "$r" | jq -r '.id')"
+        echo
+        # Keep the bot's machine-readable markers (sev=, engine=); drop only collapsible boilerplate.
+        printf '%s' "$r" | jq -r '.body' | perl -0pe 's/<details>.*?<\/details>//gs; s/<!--(?!\s*ai-review:(sev|engine|approval))(.*?)-->//gs'
+        echo
+        echo "---"
+        echo
+    done
+    echo "A CHANGES_REQUESTED body naming a defect with no thread still blocks: fix what it names, then the next push re-reviews. Confirm with: gh pr view $PR --json reviewDecision"
+    echo
+}
+
+THREADS=$(fetch_threads) || { echo "pr-threads: GraphQL query failed" >&2; exit 1; }
+TOTAL=$(printf '%s\n' "$THREADS" | grep -c . )
+if [ "$ALL" = 1 ]; then SEL="$THREADS"; else SEL=$(printf '%s\n' "$THREADS" | jq -c 'select(.isResolved==false)'); fi
+COUNT=$(printf '%s\n' "$SEL" | grep -c .)
+
+if [ "$ALL" = 1 ]; then echo "# PR #$PR ($REPO): all $TOTAL review threads"; else echo "# PR #$PR ($REPO): $COUNT unresolved of $TOTAL review threads"; fi
+[ "$(git rev-parse --is-inside-work-tree 2>/dev/null)" = true ] || echo "(not inside a git checkout: file excerpts and covering tests will be skipped — run from the PR's worktree)"
+echo
+if [ "$COUNT" = 0 ]; then [ "$REVIEWS" = 1 ] && review_body_findings; exit 0; fi
+
+printf '%s\n' "$SEL" | while IFS= read -r t; do
+    [ -z "$t" ] && continue
+    id=$(printf '%s' "$t" | jq -r .id)
+    path=$(printf '%s' "$t" | jq -r '.path // ""')
+    line=$(printf '%s' "$t" | jq -r '.line // .originalLine // 0')
+    resolved=$(printf '%s' "$t" | jq -r .isResolved)
+    outdated=$(printf '%s' "$t" | jq -r .isOutdated)
+    cid=$(printf '%s' "$t" | jq -r '.comments.nodes[0].databaseId')
+    author=$(printf '%s' "$t" | jq -r '.comments.nodes[0].author.login // "?"')
+    replies=$(printf '%s' "$t" | jq -r '.comments.totalCount - 1')
+    body=$(printf '%s' "$t" | jq -r '.comments.nodes[0].body')
+    flags=""; [ "$resolved" = true ] && flags="$flags RESOLVED"; [ "$outdated" = true ] && flags="$flags OUTDATED"
+    echo "## $path:$line  ·  $author  ·  comment $cid  ·  thread $id  ·  replies $replies$flags"
+    echo
+    printf '%s\n' "$body"
+    echo
+    if [ -n "$path" ] && [ -f "$path" ] && [ "$line" -gt 0 ] 2>/dev/null; then
+        from=$((line - CTX)); [ "$from" -lt 1 ] && from=1; to=$((line + CTX))
+        echo "### $path lines $from-$to (current worktree)"
+        echo '```'
+        sed -n "${from},${to}p" "$path" | awk -v s="$from" -v l="$line" '{ printf("%s%5d  %s\n", (NR+s-1==l ? ">" : " "), NR+s-1, $0) }'
+        echo '```'
+    elif [ -n "$path" ]; then
+        echo "### $path: not present in this worktree (deleted or renamed?)"
+    fi
+    if [ "$TESTS" = 1 ] && [ -n "$path" ] && [ -f "$path" ]; then
+        tests=$(covering_tests "$path")
+        if [ -n "$tests" ]; then echo; echo "### covering tests"; printf '%s\n' "$tests" | sed 's/^/- /'; else echo; echo "### covering tests: none found by import scan — verify-diff --related will confirm"; fi
+    fi
+    echo
+    echo "close with: pr-thread-close $PR $cid <sha> \"<what changed>\""
+    echo
+    echo "---"
+    echo
+done
+[ "$REVIEWS" = 1 ] && review_body_findings
+exit 0

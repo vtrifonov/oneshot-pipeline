@@ -1,0 +1,72 @@
+#!/bin/bash
+# audit-wait <pr> <first-comment-id>... [--max SECONDS] [--interval SECONDS] [--repo owner/name]
+#
+# After the author replies to and resolves a bot review thread, a marker-compatible bot
+# runs an asynchronous ONE-TIME audit and posts a reply on that thread containing
+# `ai-review:author-resolve-audit`, either accepting it (thread stays resolved) or
+# reopening it. This waits, with its own pacing, until every named thread is
+# audited or reopened, then prints ONE machine-readable last line:
+#
+#   AUDIT DONE audited=<ids,> reopened=<ids,> pending=<ids,>
+#
+#   exit 0  nothing pending
+#   exit 2  --max reached with ids still pending (default 240s; call again)
+#
+# Ids are the thread's FIRST-COMMENT databaseId (the "comment <id>" number in
+# pr-threads output). Read-only. Paginates past GitHub's silent 100-thread cap.
+
+set -o pipefail
+
+PR=""; MAX=240; INTERVAL=20; REPO=""; IDS=()
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --max) MAX="$2"; shift 2 ;;
+        --interval) INTERVAL="$2"; shift 2 ;;
+        --repo) REPO="$2"; shift 2 ;;
+        -h|--help) sed -n '2,17p' "$0"; exit 0 ;;
+        *) if [ -z "$PR" ]; then PR="$1"; else IDS+=("$1"); fi; shift ;;
+    esac
+done
+[ -z "$PR" ] || [ "${#IDS[@]}" = 0 ] && { echo "usage: audit-wait <pr> <first-comment-id>... [--max S] [--interval S] [--repo owner/name]" >&2; exit 64; }
+# shellcheck source=lib/resolve-pr-repo.sh
+. "$(dirname "$(readlink -f "$0")")/lib/resolve-pr-repo.sh"
+REPO=$(resolve_pr_repo audit-wait "$PR" "$REPO") || exit 64
+OWNER=${REPO%/*}; NAME=${REPO#*/}
+
+# One JSON object per thread: {first, resolved, audited}
+fetch_threads() {
+    local cursor="" after="" page
+    while :; do
+        [ -n "$cursor" ] && after=", after: \"$cursor\""
+        page=$(gh api graphql -f query="
+        query { repository(owner: \"$OWNER\", name: \"$NAME\") { pullRequest(number: $PR) {
+          reviewThreads(first: 100$after) {
+            pageInfo { hasNextPage endCursor }
+            nodes { isResolved comments(first: 50) { nodes { databaseId body } } } } } } }") || return 1
+        printf '%s\n' "$page" | jq -c '.data.repository.pullRequest.reviewThreads.nodes[]
+            | {first: (.comments.nodes[0].databaseId | tostring), resolved: .isResolved,
+               audited: ([.comments.nodes[].body | test("ai-review:author-resolve-audit")] | any)}'
+        [ "$(printf '%s' "$page" | jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage')" = "true" ] || break
+        cursor=$(printf '%s' "$page" | jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.endCursor')
+    done
+}
+
+join() { local IFS=,; echo "$*"; }
+
+start=$(date +%s); prev=""
+while :; do
+    threads=$(fetch_threads) || { echo "audit-wait: GraphQL query failed" >&2; exit 1; }
+    audited=(); reopened=(); pending=()
+    for id in "${IDS[@]}"; do
+        t=$(printf '%s\n' "$threads" | jq -c --arg id "$id" 'select(.first==$id)' | head -1)
+        if [ -z "$t" ]; then pending+=("$id:not-found"); continue; fi
+        if [ "$(printf '%s' "$t" | jq -r .resolved)" = "false" ]; then reopened+=("$id")
+        elif [ "$(printf '%s' "$t" | jq -r .audited)" = "true" ]; then audited+=("$id")
+        else pending+=("$id"); fi
+    done
+    line="audited=$(join "${audited[@]}") reopened=$(join "${reopened[@]}") pending=$(join "${pending[@]}")"
+    if [ "$line" != "$prev" ]; then echo "[$(date +%H:%M:%S)] +$(( $(date +%s) - start ))s $line"; prev="$line"; fi
+    if [ "${#pending[@]}" = 0 ]; then echo "AUDIT DONE $line"; exit 0; fi
+    if [ $(( $(date +%s) - start )) -ge "$MAX" ]; then echo "AUDIT DONE $line"; exit 2; fi
+    sleep "$INTERVAL"
+done
