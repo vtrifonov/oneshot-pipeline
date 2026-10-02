@@ -4,21 +4,15 @@ Portable Claude Code skills, a PR wave-fixer agent and helper scripts.
 
 ## Install from the shared repository
 
-Install Claude Code, git and bash. Copy this repository's clone URL from GitHub,
-replace the placeholder below, then run:
-
-```sh
-git clone 'REPLACE_WITH_REPOSITORY_CLONE_URL' ~/work/claude-config
-bash ~/work/claude-config/link.sh
-```
-
-Keep the clone in place: installation uses symlinks. Restart Claude Code so it
-discovers the skills and pr-shepherd agent. Then ask it to use oneshot-pipeline
-for your task. From an existing checkout, the installation command is:
+Requires Claude Code, git and bash. From the repository root, run:
 
 ```sh
 bash ./link.sh
 ```
+
+Keep the checkout in place: installation uses symlinks. Restart Claude Code so
+it discovers the skills and pr-shepherd agent. Then ask it to use
+oneshot-pipeline for your task.
 
 The command installs both skills, pr-shepherd, CLI helpers, their shared library,
 and the optional scoped-verification hook file into your own ~/.claude
@@ -44,9 +38,11 @@ capabilities must be resolved before claiming completion.
 
 ## Update
 
+From the repository root:
+
 ```sh
-git -C ~/work/claude-config pull --ff-only
-bash ~/work/claude-config/link.sh
+git pull --ff-only
+bash ./link.sh
 ```
 
 Edits to existing linked files appear automatically; rerun installation for new
