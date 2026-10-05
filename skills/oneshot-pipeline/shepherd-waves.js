@@ -9,7 +9,7 @@ export const meta = {
   ],
 }
 
-// args: { pr, worktree, slug, standingDecisions?, maxWaves?, reportDir? }
+// args: { pr, worktree, slug, standingDecisions?, maxWaves?, reportDir?, fixModel? }
 const a = args || {}
 if (!a.pr || !a.worktree) throw new Error('args.pr and args.worktree are required')
 const PR = String(a.pr)
@@ -17,6 +17,7 @@ const WT = a.worktree
 const SLUG = a.slug || `pr-${PR}`
 const MAX_WAVES = a.maxWaves || 6
 const REPORT_DIR = a.reportDir || `/tmp/${SLUG}`
+const FIX_MODEL = a.fixModel || 'fable'
 const STANDING = a.standingDecisions || '(none given — park spec conflicts, do not decide them)'
 
 const CONTRACT = `Finding contract. A finding has four parts in this order: severity, claim (one sentence), failure scenario (concrete input or state -> wrong output, crash, or violated invariant), fix sketch. Severity is DERIVED from the scenario: BLOCKER = security, data loss, deploy-safety rule, or spec requirement not met; MAJOR = correctness bug, missing test for a stated invariant, coupled surface left out; MINOR = anything without a concrete failure scenario (style, naming, hypothetical future need, "consider", "could be cleaner"). A finding that arrives without a failure scenario is MINOR regardless of the label the reviewer put on it.`
@@ -213,7 +214,7 @@ for (let w = 1; w <= MAX_WAVES; w++) {
     return { status: 'no_findings_not_approved', pr: PR, head, decision: wait.decision, reviewDecision: wait.reviewDecision, approval: wait.approval, skipReason: wait.skipReason, waves, note: 'a stale CHANGES_REQUESTED review from an earlier head may need dismissing — controller checks gh pr view --json reviews' }
   }
 
-  const fix = await agent(fixPrompt(w, wait, cls, actionable, minors, parkedIds), { label: `fix:w${w}`, phase: 'Fix', schema: FIX_SCHEMA, model: 'fable', agentType: 'pr-shepherd' })
+  const fix = await agent(fixPrompt(w, wait, cls, actionable, minors, parkedIds), { label: `fix:w${w}`, phase: 'Fix', schema: FIX_SCHEMA, model: FIX_MODEL, agentType: 'pr-shepherd' })
   if (fix) {
     for (const p of fix.parked || []) if (p.id && !parkedIds.includes(String(p.id))) parkedIds.push(String(p.id))
     for (const r of fix.reopenedAfterAudit || []) if (r && !parkedIds.includes(String(r))) parkedIds.push(String(r))

@@ -1,6 +1,6 @@
 ---
 name: oneshot-pipeline
-description: Use when the user asks to "execute as one shot", "run the playbook", "quick one shot" / "one shot, quick mode" (the reduced-review quick mode), or wants a feature or fix taken from idea to a merge-ready PR without repeated check-ins.
+description: Use when the user asks to "execute as one shot", "run the playbook", "quick one shot" / "one shot, quick mode" (the reduced-review quick mode), "one shot without fable" / "no fable" (opus replaces fable everywhere), or wants a feature or fix taken from idea to a merge-ready PR without repeated check-ins.
 ---
 
 # One-Shot Pipeline (idea → green merge-ready PR)
@@ -71,7 +71,7 @@ Controller disposition: validate premises and deduplicate first; mark accepted/r
 
 ## Model matrix
 
-Claude defaults below: pass `model` when that alias is available. Other runtimes use the adapter's available model mapping or inherit; never pass unavailable aliases. **If `fable` is not available in the runtime, the brainstorm, plan and wave-fixer agents fall back to `opus`** — they stay subagents either way, because the phase structure (design brief file, one sole writer per artifact) is what makes revisions cheap, not the model alias. `fable` goes where judgment beats prose: design exploration, task decomposition, and disputing reviewer claims; it is never used on parallel panels, where tier cost multiplies.
+Claude defaults below: pass `model` when that alias is available. Other runtimes use the adapter's available model mapping or inherit; never pass unavailable aliases. **No-fable mode (opt-in, the user names it):** when the invocation says "without fable", "no fable" or "opus only", every `fable` row below runs on `opus` instead — brainstorm, plan author/reviser and wave fixer (10a dispatch `model: opus`; 10b pass `fixModel: 'opus'` in the Workflow args). Nothing else changes: same agents, same sole-writer ownership, same phases. Like quick mode it is orthogonal to lane and mode, never inferred, never dropped mid-run; record it by suffixing the metrics row's `mode` value with `+nofable` (`standard+nofable`, `quick+nofable`) — the 19-column schema stays fixed. Wherever a phase reference says `fable`, read "the plan/design/fixer model". **If `fable` is not available in the runtime, the brainstorm, plan and wave-fixer agents fall back to `opus`** — they stay subagents either way, because the phase structure (design brief file, one sole writer per artifact) is what makes revisions cheap, not the model alias. `fable` goes where judgment beats prose: design exploration, task decomposition, and disputing reviewer claims; it is never used on parallel panels, where tier cost multiplies.
 
 | Work | Model | Why |
 |---|---|---|
