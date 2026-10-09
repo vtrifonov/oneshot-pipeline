@@ -30,20 +30,33 @@ green and no review threads are left open. It never merges for you.
 ## How it works
 
 ```mermaid
-flowchart LR
-    A([Idea]) --> B[0 Setup<br/>worktree + options]
-    B --> C{{1 Brainstorm<br/>your one check-in}}
-    C --> D[2 Spec]
-    D --> E[3 Spec panel]
-    E --> F[4 Plan]
-    F --> G[5 Plan panel]
-    G --> H[6 Implement<br/>TDD]
-    H --> I[7 Code review]
-    I --> J[8 Pre-push gates]
-    J --> K[9 Open PR]
-    K --> L[10 Shepherd<br/>fix review waves]
-    L --> M([Green PR,<br/>ready to merge])
+flowchart TD
+    setup["<b>0 · Setup</b><br/>worktree · run options"] --> brainstorm{{"<b>1 · Brainstorm</b><br/>👤 your one check-in"}}
+
+    brainstorm -- standard --> sspec["<b>2–3 · Spec + panel</b><br/>reviewers sized by risk"]
+    sspec --> splan["<b>4 · Plan</b><br/>task list · TDD matrix"]
+    splan --> spanel["<b>5 · Plan panel</b><br/>full lane"]
+    spanel --> ssdd["<b>6 · Implement</b><br/>subagent-driven TDD"]
+
+    brainstorm -- quick --> qspec["<b>2–3 · Spec + panel</b><br/>≤ 2 reviewers"]
+    qspec --> qplan["<b>4 · Plan</b><br/>no plan panel"]
+    qplan --> qinline["<b>6 · Implement</b><br/>inline TDD"]
+
+    ssdd --> review["<b>7 · Code review</b><br/>fresh reviewer subagent"]
+    qinline --> review
+    review --> gates["<b>8–9 · Gates + PR</b><br/>full suite · never open red"]
+    gates --> shepherd["<b>10 · Shepherd</b><br/>🔁 fix waves until clean"]
+    shepherd --> done(["✅ Green, merge-ready PR"])
+
+    classDef you fill:#0969da,stroke:#0550ae,color:#fff
+    classDef quick fill:#8250df,stroke:#6639ba,color:#fff
+    classDef finish fill:#1a7f37,stroke:#116329,color:#fff
+    class brainstorm you
+    class qspec,qplan,qinline quick
+    class done finish
 ```
+
+<sub>🟦 your only check-in · 🟪 quick mode · 🟩 done</sub>
 
 | Phase | What happens |
 |---|---|
