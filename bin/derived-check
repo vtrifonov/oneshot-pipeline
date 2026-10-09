@@ -1,0 +1,32 @@
+#!/bin/bash
+# derived-check [--base <ref>]
+# Pre-push drift check for state that is derived from the diff but not in it:
+# lockfiles newer than node_modules (install after rebase), duplicate migration
+# timestamps (two branches picked the same prefix), tracked generated files
+# that changed (regenerate and compare). Exit 1 on any finding.
+set -o pipefail
+cd "$(git rev-parse --show-toplevel 2>/dev/null)" || { echo "derived-check: not a git checkout" >&2; exit 64; }
+BASE=""
+while [ $# -gt 0 ]; do case "$1" in --base) BASE="$2"; shift 2 ;; *) echo "usage: derived-check [--base <ref>]" >&2; exit 64 ;; esac; done
+if [ -z "$BASE" ]; then
+    BASE=$(git symbolic-ref -q --short refs/remotes/origin/HEAD 2>/dev/null || echo origin/main)
+fi
+FOUND=0
+changed=$(git diff --name-only "$BASE...HEAD" 2>/dev/null)
+for lock in $(printf '%s\n' "$changed" | grep -E '(^|/)(package-lock\.json|pnpm-lock\.yaml)$'); do
+    dir=$(dirname "$lock"); nm="$dir/node_modules"
+    stamp="$nm/.package-lock.json"; [ -e "$stamp" ] || stamp="$nm"
+    if [ ! -e "$stamp" ] || [ "$lock" -nt "$stamp" ]; then
+        echo "lockfile $lock changed since $BASE and $nm is older than it → run the install in $dir (not --ignore-scripts)"; FOUND=1
+    fi
+done
+if [ -d supabase/migrations ]; then
+    for ts in $(ls supabase/migrations | sed -E 's/^([0-9]+)_.*/\1/' | sort | uniq -d); do
+        echo "migration timestamp $ts is duplicated in supabase/migrations → rename yours and cold-start the test stack"; FOUND=1
+    done
+fi
+for gen in $(printf '%s\n' "$changed" | grep -E '(/build/|ApiPaths\.ts$|/sdk/.*\.mjs$)'); do
+    echo "generated file $gen is tracked and changed → regenerate with the repo's generator and diff before pushing"; FOUND=1
+done
+[ "$FOUND" = 0 ] && echo "derived-check: clean"
+exit $FOUND
