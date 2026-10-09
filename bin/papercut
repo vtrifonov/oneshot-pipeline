@@ -1,0 +1,90 @@
+#!/usr/bin/env python3
+"""papercut add --class C --min N --project P [--status open|fixed|upstream] "<symptom>" "<fix>"
+papercut report [--since YYYY-MM-DD]
+papercut classes
+
+Appends one line to $PAPERCUTS_FILE (default ~/code/papercuts.md):
+  date · class · Nm · status · symptom · fix · project
+and prints how many prior entries the class already has. Two priors = third
+strike: the fix is a hook or script, not another line.
+"""
+import argparse
+import collections
+import datetime
+import os
+import re
+import sys
+
+CLASSES = "sd ctx-wire worktree install hook prompt-stall agent-dead watchdog message concurrency cwd pr-helper ci gh derived false-green permission other".split()
+SEP = " · "
+FILE = os.environ.get("PAPERCUTS_FILE", os.path.expanduser("~/code/papercuts.md"))
+
+
+def entries():
+    with open(FILE, errors="replace") as f:
+        for line in f:
+            line = line.strip().lstrip("- ")
+            if not re.match(r"^\d{4}-\d{2}-\d{2}" + re.escape(SEP), line):
+                continue
+            parts = line.split(SEP)
+            if len(parts) >= 7 and parts[1] in CLASSES:
+                m = re.match(r"^(\d+)m$", parts[2])
+                yield {"date": parts[0], "class": parts[1], "min": int(m.group(1)) if m else 0, "status": parts[3], "project": parts[-1]}
+            else:
+                yield {"date": parts[0], "class": "legacy", "min": 0, "status": "open", "project": parts[-1]}
+
+
+def cmd_add(a):
+    if a.cls not in CLASSES:
+        print(f"papercut: unknown class {a.cls}; one of: {' '.join(CLASSES)}", file=sys.stderr); return 64
+    for text in (a.symptom, a.fix, a.project):
+        if "·" in text or "\n" in text:
+            print("papercut: fields may not contain '·' or newlines", file=sys.stderr); return 64
+    prior = sum(1 for e in entries() if e["class"] == a.cls)
+    line = SEP.join([datetime.date.today().isoformat(), a.cls, f"{a.min}m", a.status, a.symptom, a.fix, a.project])
+    with open(FILE, "a") as f:
+        f.write(line + "\n")
+    print(f"class {a.cls}: {prior} prior entries")
+    if prior >= 2:
+        print("THIRD STRIKE: write a hook or script for this class (see docs/superpowers/plans/2026-10-09-papercuts-enforcement.md)")
+    return 0
+
+
+def cmd_report(a):
+    agg = collections.OrderedDict()
+    for e in entries():
+        if a.since and e["date"] < a.since:
+            continue
+        s = agg.setdefault(e["class"], {"n": 0, "min": 0, "last": ""})
+        s["n"] += 1; s["min"] += e["min"]; s["last"] = max(s["last"], e["date"])
+    rows = sorted(agg.items(), key=lambda kv: (-kv[1]["min"], -kv[1]["n"]))
+    print(f"{'class':<14}{'entries':>8}{'minutes':>9}  last")
+    for cls, s in rows:
+        print(f"{cls:<14}{s['n']:>8}{s['min']:>9}  {s['last']}")
+    return 0
+
+
+def main():
+    ap = argparse.ArgumentParser(add_help=False)
+    sub = ap.add_subparsers(dest="cmd")
+    p = sub.add_parser("add", add_help=False)
+    p.add_argument("--class", dest="cls", required=True); p.add_argument("--min", type=int, required=True)
+    p.add_argument("--project", required=True); p.add_argument("--status", default="open", choices=["open", "fixed", "upstream"])
+    p.add_argument("symptom"); p.add_argument("fix")
+    r = sub.add_parser("report", add_help=False); r.add_argument("--since")
+    sub.add_parser("classes", add_help=False)
+    try:
+        a = ap.parse_args()
+    except SystemExit:
+        print(__doc__, file=sys.stderr); return 64
+    if a.cmd == "add":
+        return cmd_add(a)
+    if a.cmd == "report":
+        return cmd_report(a)
+    if a.cmd == "classes":
+        print(" ".join(CLASSES)); return 0
+    print(__doc__, file=sys.stderr); return 64
+
+
+if __name__ == "__main__":
+    sys.exit(main())
