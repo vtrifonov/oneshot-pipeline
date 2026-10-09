@@ -31,21 +31,21 @@ green and no review threads are left open. It never merges for you.
 
 ```mermaid
 flowchart TD
-    setup["<b>0 · Setup</b><br/>worktree · run options"] --> brainstorm{{"<b>1 · Brainstorm</b><br/>👤 your one check-in"}}
+    setup["<b>0 · Setup</b><br/>worktree · run options"] --> brainstorm{{"<b>✨ 1 · Brainstorm</b><br/>👤 your one check-in"}}
 
     brainstorm -- standard --> sspec["<b>2–3 · Spec + panel</b><br/>reviewers sized by risk"]
-    sspec --> splan["<b>4 · Plan</b><br/>task list · TDD matrix"]
+    sspec --> splan["<b>✨ 4 · Plan</b><br/>task list · TDD matrix"]
     splan --> spanel["<b>5 · Plan panel</b><br/>full lane"]
     spanel --> ssdd["<b>6 · Implement</b><br/>subagent-driven TDD"]
 
     brainstorm -- quick --> qspec["<b>2–3 · Spec + panel</b><br/>≤ 2 reviewers"]
-    qspec --> qplan["<b>4 · Plan</b><br/>no plan panel"]
+    qspec --> qplan["<b>✨ 4 · Plan</b><br/>no plan panel"]
     qplan --> qinline["<b>6 · Implement</b><br/>inline TDD"]
 
     ssdd --> review["<b>7 · Code review</b><br/>fresh reviewer subagent"]
     qinline --> review
     review --> gates["<b>8–9 · Gates + PR</b><br/>full suite · never open red"]
-    gates --> shepherd["<b>10 · Shepherd</b><br/>🔁 fix waves until clean"]
+    gates --> shepherd["<b>✨ 10 · Shepherd</b><br/>🔁 fix waves until clean"]
     shepherd --> done(["✅ Green, merge-ready PR"])
 
     classDef you fill:#0969da,stroke:#0550ae,color:#fff
@@ -54,9 +54,13 @@ flowchart TD
     class brainstorm you
     class qspec,qplan,qinline quick
     class done finish
+    style brainstorm stroke:#d4a72c,stroke-width:4px
+    style splan stroke:#d4a72c,stroke-width:4px
+    style qplan stroke:#d4a72c,stroke-width:4px
+    style shepherd stroke:#d4a72c,stroke-width:4px
 ```
 
-<sub>🟦 your only check-in · 🟪 quick mode · 🟩 done</sub>
+<sub>🟦 your only check-in · 🟪 quick mode · 🟩 done · ✨ gold border = runs on <code>fable</code>, or on <code>opus</code> in no-fable mode</sub>
 
 | Phase | What happens |
 |---|---|
