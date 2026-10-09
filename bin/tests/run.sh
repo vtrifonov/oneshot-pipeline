@@ -43,6 +43,11 @@ case "$*" in
     "pr checks 7 --json name,bucket"|"pr checks 7 --repo acme/widgets --json name,bucket")
         n=$(cat "$GH_STATE/tick" 2>/dev/null || echo 0); echo $((n+1)) > "$GH_STATE/tick"
         f="$GH_FIXTURES/checks-$n.json"; [ -f "$f" ] || f="$GH_FIXTURES/checks-last.json"; cat "$f" ;;
+    "pr view 7 --repo acme/widgets --json headRefOid --jq .headRefOid") echo "feedfacefeedfacefeedfacefeedfacefeedface" ;;
+    "pr view 7 --repo acme/widgets --json mergeable --jq .mergeable") echo "MERGEABLE" ;;
+    "pr view 7 --repo acme/widgets --json reviewDecision --jq .reviewDecision") cat "$GH_STATE/reviewDecision" 2>/dev/null || echo "REVIEW_REQUIRED" ;;
+    "api repos/acme/widgets/pulls/7/reviews --paginate") cat "$GH_FIXTURES/reviews.json" ;;
+    "run view "*) echo "[]" ;;
     *) echo "stub gh: unhandled: $*" >&2; exit 99 ;;
 esac
 STUB
@@ -143,6 +148,27 @@ out=$("$BIN/ci-wait" 7 --interval 1 --max 2 2>&1); rc=$?
 check "ci-wait: timeout exits 2" 2 "$rc" "$out" 'TIMEOUT after 2s'
 n=$(printf '%s\n' "$out" | grep -c 'pending build')
 if [ "$n" = 1 ]; then ok; else bad "ci-wait prints transitions once (got $n)" "$out"; fi
+
+# ---------------------------------------------------------------- review-wait
+HEAD=feedfacefeedfacefeedfacefeedfacefeedface
+rm -f "$GH_STATE/tick" "$GH_FIXTURES"/checks-*.json; mkchecks "$GH_FIXTURES/checks-last.json" "pass build"
+# A: bot CHANGES_REQUESTED with an engine marker → done, withheld, exit 0 (used to spin to timeout)
+printf '[{"user":{"login":"example-reviewer[bot]"},"state":"CHANGES_REQUESTED","commit_id":"%s","submitted_at":"2026-10-09T10:00:00Z","body":"<!-- ai-review:engine=codex reviewed=%s verdict=withheld -->\\n**P1** fix it"}]' "$HEAD" "$HEAD" > "$GH_FIXTURES/reviews.json"
+out=$("$BIN/review-wait" 7 --max 5 --interval 0 2>&1); rc=$?
+check "review-wait: CHANGES_REQUESTED is terminal" 0 "$rc" "$out" 'REVIEW DONE' 'decision=CHANGES_REQUESTED' 'approval=withheld' 'bot=example-reviewer\[bot\]'
+# B: APPROVED with approval marker, AI_REVIEW_BOT unset → bot auto-detected from the marker
+printf '[{"user":{"login":"some-other[bot]"},"state":"APPROVED","commit_id":"%s","submitted_at":"2026-10-09T10:01:00Z","body":"<!-- ai-review:approval reviewed=%s -->"}]' "$HEAD" "$HEAD" > "$GH_FIXTURES/reviews.json"
+echo APPROVED > "$GH_STATE/reviewDecision"
+out=$(env -u AI_REVIEW_BOT "$BIN/review-wait" 7 --timeout 5 --interval 0 2>&1); rc=$?
+check "review-wait: auto-detects bot, --timeout alias" 0 "$rc" "$out" 'approval=approved' 'bot=some-other\[bot\]' 'reviewDecision=APPROVED'
+# C: a human APPROVED and no bot review on head → keep waiting, timeout 2 with a hint
+printf '[{"user":{"login":"alice"},"state":"APPROVED","commit_id":"%s","submitted_at":"2026-10-09T10:02:00Z","body":"lgtm"}]' "$HEAD" > "$GH_FIXTURES/reviews.json"
+out=$(env -u AI_REVIEW_BOT "$BIN/review-wait" 7 --max 1 --interval 1 2>&1); rc=$?
+check "review-wait: no bot verdict yet → timeout with hint" 2 "$rc" "$out" 'TIMEOUT' 'AI_REVIEW_BOT'
+# D: old review on a previous head is ignored
+printf '[{"user":{"login":"example-reviewer[bot]"},"state":"APPROVED","commit_id":"0000000","submitted_at":"2026-10-09T09:00:00Z","body":"<!-- ai-review:approval reviewed=0000000 -->"}]' > "$GH_FIXTURES/reviews.json"
+out=$("$BIN/review-wait" 7 --max 1 --interval 1 2>&1); rc=$?
+check "review-wait: stale-head review ignored" 2 "$rc" "$out" 'TIMEOUT'
 
 # ---------------------------------------------------------------- repo resolution
 # PR 8 does not exist in acme/widgets, the repo the current directory resolves to:

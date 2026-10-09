@@ -39,6 +39,9 @@ case "$*" in
   "pr view 7 --repo example/project --json id --jq .id") echo PR_test ;;
   "pr checks 7 --repo example/project --json name,bucket")
     echo '[{"name":"build","bucket":"pass"},{"name":"Required reviewers","bucket":"pending"}]' ;;
+  "pr view 7 --repo example/project --json headRefOid --jq .headRefOid") echo abc ;;
+  "pr view 7 --repo example/project --json mergeable --jq .mergeable") echo MERGEABLE ;;
+  "api repos/example/project/pulls/7/reviews --paginate") echo "[]" ;;
   *) exit 99 ;;
 esac
 ''')
@@ -52,8 +55,8 @@ esac
             self.assertEqual(subprocess.run(command, env=env, capture_output=True).returncode, 0)
             result = subprocess.run([str(BIN / "review-wait"), "7", "--max", "0"],
                                     env=env, capture_output=True, text=True)
-            self.assertEqual(result.returncode, 64)
-            self.assertIn("AI_REVIEW_BOT", result.stderr)
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("AI_REVIEW_BOT", result.stdout)
 
 
 if __name__ == "__main__":

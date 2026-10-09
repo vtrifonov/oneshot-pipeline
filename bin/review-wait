@@ -1,19 +1,23 @@
 #!/bin/bash
-# review-wait <pr> [--max SECONDS] [--interval SECONDS] [--repo owner/name]
+# review-wait <pr> [--max SECONDS | --timeout SECONDS] [--interval SECONDS] [--repo owner/name]
 #
 # Blocks until the AI reviewer has DECIDED on the PR's current head, or CI fails.
 # ci-wait can return when a configured review CHECK passes; that check is green even
 # when the reviewer skipped on size, and it predates the approval decision by
-# minutes. This script waits for the decision itself: the configured bot
-# review whose body carries `<!-- ai-review:approval reviewed=<head sha> -->`.
+# minutes. This script waits for the decision itself. Terminal: any review by the
+# bot on the current head whose state is APPROVED or CHANGES_REQUESTED, or whose
+# body carries `ai-review:approval reviewed=<head>` / `ai-review:engine=<x> reviewed=<head>`.
+# The bot is AI_REVIEW_BOT when set; otherwise the login of the newest review on
+# the head whose body carries an `ai-review:` marker.
 #
 #   exit 0  REVIEW DONE — prints head, decision state, approved|withheld,
 #           skipReason from the run log (pr_too_large means nothing was
-#           reviewed), unresolved thread count, and every non-approval review
-#           the bot posted on this head (findings can live in a review BODY
+#           reviewed), unresolved thread count, bot login, and every non-approval
+#           review the bot posted on this head (findings can live in a review BODY
 #           with no thread — see pr-threads --reviews)
 #   exit 1  a CI check failed or was cancelled (named on stdout)
 #   exit 2  --max reached (default 240s; use bounded continuation and call again)
+#   exit 3  branch is CONFLICTING (no check suite will ever appear)
 #
 # No checks are excluded by default; CI_EXCLUDE_CHECKS explicitly configures non-gating checks.
 
@@ -22,10 +26,11 @@ set -o pipefail
 PR=""; MAX=240; INTERVAL=30; REPO=""
 while [ $# -gt 0 ]; do
     case "$1" in
-        --max) MAX="$2"; shift 2 ;;
+        --max|--timeout) MAX="$2"; shift 2 ;;
         --interval) INTERVAL="$2"; shift 2 ;;
         --repo) REPO="$2"; shift 2 ;;
-        -h|--help) sed -n '2,18p' "$0"; exit 0 ;;
+        -h|--help) sed -n '2,21p' "$0"; exit 0 ;;
+        -*) echo "review-wait: unknown flag $1" >&2; exit 64 ;;
         *) PR="$1"; shift ;;
     esac
 done
@@ -34,8 +39,7 @@ done
 . "$(dirname "$(readlink -f "$0")")/lib/resolve-pr-repo.sh"
 REPO=$(resolve_pr_repo review-wait "$PR" "$REPO") || exit 64
 
-BOT=${AI_REVIEW_BOT:-}
-[ -n "$BOT" ] || { echo "review-wait: configure AI_REVIEW_BOT for a marker-compatible bot; otherwise use native review APIs" >&2; exit 64; }
+BOT=${AI_REVIEW_BOT:-}   # optional: when unset, the login of the newest review carrying an ai-review: marker on the head
 EXCLUDE=${CI_EXCLUDE_CHECKS:-'^$'}
 
 unresolved_count() { # paginated: GitHub caps reviewThreads at 100 per page and never warns
@@ -83,24 +87,32 @@ while :; do
         fi
         snap="no checks reported yet"
     fi
-    reviews=$(gh api "repos/$REPO/pulls/$PR/reviews" --paginate 2>/dev/null | jq -c --arg bot "$BOT" --arg head "$head" '.[] | select(.user.login==$bot and .commit_id==$head)')
-    approval=$(printf '%s\n' "$reviews" | jq -c --arg head "$head" 'select(.body | test("ai-review:approval reviewed=" + $head))' | tail -1)
-    state_line="head=${head:0:8} checks: $snap bot_reviews_on_head=$(printf '%s\n' "$reviews" | grep -c .)"
+    all_head=$(gh api "repos/$REPO/pulls/$PR/reviews" --paginate 2>/dev/null | jq -c --arg head "$head" '.[] | select(.commit_id==$head)')
+    bot="$BOT"
+    if [ -z "$bot" ]; then
+        bot=$(printf '%s\n' "$all_head" | jq -r 'select(.body | test("ai-review:")) | .user.login' | tail -1)
+    fi
+    reviews=""; [ -n "$bot" ] && reviews=$(printf '%s\n' "$all_head" | jq -c --arg bot "$bot" 'select(.user.login==$bot)')
+    verdict_review=$(printf '%s\n' "$reviews" | jq -c --arg head "$head" 'select(.state=="APPROVED" or .state=="CHANGES_REQUESTED" or (.body | test("ai-review:(approval|engine=[^ ]+) reviewed=" + $head)))' | tail -1)
+    state_line="head=${head:0:8} checks: $snap bot=${bot:-?} bot_reviews_on_head=$(printf '%s\n' "$reviews" | grep -c .)"
     if [ "$state_line" != "$prev" ]; then echo "[$(date +%H:%M:%S)] +$(( $(date +%s) - start ))s $state_line"; prev="$state_line"; fi
 
-    if [ -n "$approval" ]; then
-        decision=$(printf '%s' "$approval" | jq -r .state)
-        # Only an APPROVED decision review is approval; any other wording of the decision is withheld.
+    if [ -n "$verdict_review" ]; then
+        decision=$(printf '%s' "$verdict_review" | jq -r .state)
+        # Only an APPROVED review is approval; any other state (CHANGES_REQUESTED, COMMENTED) is withheld.
         verdict=withheld; [ "$decision" = "APPROVED" ] && verdict=approved
         engine=$(printf '%s\n' "$reviews" | jq -r 'select(.body | test("ai-review:engine=")) | .body' | tail -1)
         reason=$(skip_reason "$engine")
         size_gate=0; [ "$verdict" = withheld ] && [ "$reason" = pr_too_large ] && size_gate=1
         # Context lines first; the machine-readable REVIEW DONE line is always the LAST line of output.
-        printf '%s\n' "$reviews" | jq -r --arg head "$head" 'select(.body | test("ai-review:approval") | not) | "--- bot review \(.state) \(.submitted_at) (\(.body | gsub("<details>(.|\n)*?</details>"; "") | gsub("\n+"; " ") | .[0:400]))"'
+        printf '%s\n' "$reviews" | jq -r 'select(.body | test("ai-review:approval") | not) | "--- bot review \(.state) \(.submitted_at) (\(.body | gsub("<details>(.|\n)*?</details>"; "") | gsub("\n+"; " ") | .[0:400]))"'
         [ "$size_gate" = 1 ] && echo "SIZE GATE: withheld with skipReason=pr_too_large — nothing was reviewed; terminal (ping the owner), do not re-request"
-        echo "REVIEW DONE head=$head decision=$decision approval=$verdict skipReason=$reason size_gate=$size_gate unresolved_threads=$(unresolved_count) reviewDecision=$(gh pr view "$PR" --repo "$REPO" --json reviewDecision --jq .reviewDecision 2>/dev/null)"
+        echo "REVIEW DONE head=$head decision=$decision approval=$verdict skipReason=$reason size_gate=$size_gate unresolved_threads=$(unresolved_count) reviewDecision=$(gh pr view "$PR" --repo "$REPO" --json reviewDecision --jq .reviewDecision 2>/dev/null) bot=$bot"
         exit 0
     fi
-    if [ $(( $(date +%s) - start )) -ge "$MAX" ]; then echo "TIMEOUT after ${MAX}s head=$head — no approval decision yet; call review-wait again"; exit 2; fi
+    if [ $(( $(date +%s) - start )) -ge "$MAX" ]; then
+        echo "TIMEOUT after ${MAX}s head=$head — no bot verdict on this head yet (bot=${bot:-unknown}; set AI_REVIEW_BOT to force a login, or check: gh api repos/$REPO/pulls/$PR/reviews --jq '.[].user.login'); call review-wait again"
+        exit 2
+    fi
     sleep "$INTERVAL"
 done
