@@ -69,6 +69,27 @@ class StallWatchTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0)
         self.assertIn("COMMIT", r.stdout)
 
+    def test_missing_session_dir_is_usage_error(self):
+        r = watch(Path(self.tmp.name) / "nope")
+        self.assertEqual(r.returncode, 64)
+        self.assertIn("subagents", r.stderr)
+
+    def test_agent_prefix_stripped(self):
+        old = time.time() - 900
+        write_jsonl(self.jsonl, [(old, "assistant", {"type": "tool_use", "id": "t1", "name": "Bash"})])
+        os.utime(self.jsonl, (old, old))
+        r = watch(self.session, "--agent", "agent-a1", "--threshold", "420")
+        self.assertEqual(r.returncode, 3)
+        self.assertIn("agent=a1", r.stdout)
+
+    def test_no_transcript_yet(self):
+        r = watch(self.session, "--agent", "zz", "--threshold", "3000")
+        self.assertEqual(r.returncode, 2, r.stdout)
+        self.assertIn("TIMEOUT", r.stdout)
+        r = watch(self.session, "--agent", "zz", "--threshold", "0")
+        self.assertEqual(r.returncode, 3, r.stdout)
+        self.assertIn("reason=no-transcript", r.stdout)
+
     def test_named_agent_only(self):
         other = self.session / "subagents" / "agent-b2.jsonl"
         write_jsonl(other, [(time.time(), "assistant", {"type": "text", "text": "busy"})])

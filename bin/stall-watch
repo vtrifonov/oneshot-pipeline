@@ -13,7 +13,9 @@ Exits on the first event (the harness only notifies on exit); the controller re-
   exit 2  TIMEOUT                  --max reached, nothing happened
   exit 3  STALL agent=<id> reason=unanswered-tool-call tool=<name> age=<s>
           STALL agent=<id> reason=idle age=<s>
-  exit 64 usage
+          STALL agent=<id> reason=no-transcript age=<s>   (no transcript appeared within --threshold)
+  exit 64 usage, or <session>/subagents does not exist (wrong session dir: it is
+          ${CLAUDE_CONFIG_DIR:-~/.claude}/projects/<proj>/<session-id>/)
 """
 import argparse
 import datetime
@@ -79,6 +81,11 @@ def main():
         a = ap.parse_args()
     except SystemExit:
         print(__doc__, file=sys.stderr); sys.exit(64)
+    if not os.path.isdir(os.path.join(a.session, "subagents")):
+        print(f"stall-watch: {a.session}/subagents does not exist; the session dir is "
+              f"${{CLAUDE_CONFIG_DIR:-~/.claude}}/projects/<proj>/<session-id>/", file=sys.stderr); sys.exit(64)
+    if a.agent and a.agent.startswith("agent-"):
+        a.agent = a.agent[len("agent-"):]
     start = time.time()
     while True:
         now = time.time()
@@ -99,6 +106,8 @@ def main():
                 age = now - mtime
                 if age >= a.threshold:
                     print(f"STALL agent={agent} reason=idle age={int(age)} transcript={path}"); sys.exit(3)
+        elif now - start >= a.threshold:
+            print(f"STALL agent={a.agent or '?'} reason=no-transcript age={int(now - start)} session={a.session}"); sys.exit(3)
         if now - start >= a.max:
             print(f"TIMEOUT after {int(now - start)}s" + (f" agent={a.agent}" if a.agent else "")); sys.exit(2)
         time.sleep(a.interval)

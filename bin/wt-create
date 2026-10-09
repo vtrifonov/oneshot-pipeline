@@ -11,10 +11,10 @@
 # Last stdout line: WORKTREE <path>. Exit 64 on refusal, 1 on git failure.
 
 set -o pipefail
-BRANCH=""; BASE=""; MAIN=""; DIR=""
+BRANCH=""; BASE=""; MAIN=""; DIR=""; BASE_GIVEN=0
 while [ $# -gt 0 ]; do
     case "$1" in
-        --base) BASE="$2"; shift 2 ;;
+        --base) BASE="$2"; BASE_GIVEN=1; shift 2 ;;
         --repo) MAIN="$2"; shift 2 ;;
         --dir) DIR="$2"; shift 2 ;;
         -h|--help) sed -n '2,12p' "$0"; exit 0 ;;
@@ -25,7 +25,9 @@ done
 [ -z "$BRANCH" ] && { echo "usage: wt-create <branch> [--base <ref>] [--repo <main-checkout>] [--dir <name>]" >&2; exit 64; }
 [ -z "$MAIN" ] && MAIN=$(git rev-parse --show-toplevel 2>/dev/null)
 [ -z "$MAIN" ] && { echo "wt-create: not in a git checkout; pass --repo" >&2; exit 64; }
-MAIN=$(cd "$MAIN" && pwd -P)
+# From inside a linked worktree, --show-toplevel is the worktree; the main checkout owns the common dir.
+COMMON=$(git -C "$MAIN" rev-parse --git-common-dir 2>/dev/null) || { echo "wt-create: $MAIN is not a git checkout" >&2; exit 64; }
+MAIN=$(cd "$MAIN" && cd "$COMMON" && cd .. && pwd -P)
 case "$MAIN" in /tmp/*|/private/tmp/*|*/scratchpad/*)
     echo "wt-create: refusing: worktrees are never under /tmp or the scratchpad (Makefiles include ../solution, reboots wipe /tmp). Main checkout: $MAIN" >&2; exit 64 ;;
 esac
@@ -40,8 +42,17 @@ if [ -z "$BASE" ]; then
     [ -z "$BASE" ] && BASE=$(git -C "$MAIN" rev-parse --abbrev-ref HEAD)
 fi
 if git -C "$MAIN" show-ref --verify -q "refs/heads/$BRANCH"; then
+    echo "checking out existing local branch $BRANCH"
     git -C "$MAIN" worktree add "$WT" "$BRANCH" || exit 1
+elif git -C "$MAIN" show-ref --verify -q "refs/remotes/origin/$BRANCH"; then
+    # The PR case: the branch lives on origin. Never recreate it off base.
+    if [ "$BASE_GIVEN" = 1 ]; then
+        echo "wt-create: $BRANCH exists on origin; drop --base to check it out tracking origin/$BRANCH, or pick another branch name" >&2; exit 64
+    fi
+    echo "checking out origin/$BRANCH (tracking)"
+    git -C "$MAIN" worktree add --track -b "$BRANCH" "$WT" "origin/$BRANCH" || exit 1
 else
+    echo "creating $BRANCH from $BASE"
     git -C "$MAIN" worktree add -b "$BRANCH" "$WT" "$BASE" || exit 1
 fi
 

@@ -11,8 +11,9 @@ while [ $# -gt 0 ]; do case "$1" in --base) BASE="$2"; shift 2 ;; *) echo "usage
 if [ -z "$BASE" ]; then
     BASE=$(git symbolic-ref -q --short refs/remotes/origin/HEAD 2>/dev/null || echo origin/main)
 fi
+git rev-parse --verify -q "$BASE^{commit}" >/dev/null || { echo "derived-check: base $BASE not found (fetch, or pass --base <ref>)" >&2; exit 64; }
 FOUND=0
-changed=$(git diff --name-only "$BASE...HEAD" 2>/dev/null)
+changed=$(git diff --name-only "$BASE...HEAD") || exit 64
 for lock in $(printf '%s\n' "$changed" | grep -E '(^|/)(package-lock\.json|pnpm-lock\.yaml)$'); do
     dir=$(dirname "$lock"); nm="$dir/node_modules"
     stamp="$nm/.package-lock.json"; [ -e "$stamp" ] || stamp="$nm"

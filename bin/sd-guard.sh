@@ -30,4 +30,11 @@ case "$CMD" in
     *'\{'*|*'\('*)
         deny "Escaped braces/parens in a regex sd pattern have silently no-op'd before. Use sd -F for literals, or the Edit tool." ;;
 esac
+case "$CMD" in
+    *" -F "*|*" --fixed-strings "*) ;;
+    *)
+        if printf '%s' "$CMD" | grep -qE '\$[A-Za-z_]'; then
+            deny "In regex mode sd treats \$name in the replacement as a capture reference: an unknown name expands to nothing (silent deletion; one prod escape). Use sd -F for a literal \$name, or the Edit tool."
+        fi ;;
+esac
 exit 0

@@ -178,6 +178,7 @@ check "review-wait: stale-head review ignored" 2 "$rc" "$out" 'TIMEOUT'
 rm -f "$GH_STATE/triggered" "$GH_STATE/resolved"; touch "$GH_STATE/resolved"
 out=$("$BIN/audit-wait" 7 101 --max 1 --interval 1 2>&1); rc=$?
 check "audit-wait: pending without trigger → exit 2 with hint" 2 "$rc" "$out" 'pending=101' '--trigger'
+if printf '%s\n' "$out" | tail -1 | grep -q '^AUDIT DONE'; then ok; else bad "audit-wait: AUDIT DONE stays the last line on timeout" "$out"; fi
 if [ -f "$GH_STATE/triggered" ]; then bad "audit-wait must not comment without --trigger" "$out"; else ok; fi
 out=$("$BIN/audit-wait" 7 101 --trigger --timeout 5 --interval 0 2>&1); rc=$?
 check "audit-wait --trigger: posts /ai-review once, then audited" 0 "$rc" "$out" 'posted /ai-review' 'AUDIT DONE audited=101'

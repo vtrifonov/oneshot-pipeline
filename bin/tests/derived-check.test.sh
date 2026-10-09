@@ -14,4 +14,6 @@ echo '{"v":2}' > "$R/package-lock.json"; touch "$R/supabase/migrations/001_b.sql
 git -C "$R" add -A; git -C "$R" "${GIT_C[@]}" commit -qm change
 out=$(cd "$R" && "$BIN/derived-check" --base base 2>&1); rc=$?
 if [ "$rc" = 1 ] && printf '%s' "$out" | grep -q 'lockfile package-lock.json changed' && printf '%s' "$out" | grep -q 'migration timestamp 001 is duplicated'; then ok; else bad "lockfile + duplicate migration" "rc=$rc $out"; fi
+out=$(cd "$R" && "$BIN/derived-check" --base nope 2>&1); rc=$?
+if [ "$rc" = 64 ] && printf '%s' "$out" | grep -q 'not found'; then ok; else bad "unknown base is an error, not a clean" "rc=$rc $out"; fi
 echo "derived-check passed=$pass failed=$fail"; [ "$fail" = 0 ]

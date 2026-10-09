@@ -30,10 +30,41 @@ class SubagentGuardTest(unittest.TestCase):
 
     def test_rm_in_scratch_allowed(self):
         self.assertEqual(run_hook(self.S, "rm /private/tmp/claude-1/s/scratchpad/p.txt", agent="a1").returncode, 0)
-        self.assertEqual(run_hook(self.S, "rm -r /tmp/probe", agent="a1").returncode, 0)
+        self.assertEqual(run_hook(self.S, "rm -f /tmp/probe.txt", agent="a1").returncode, 0)
+
+    def test_quoted_scratch_operand_allowed(self):
+        self.assertEqual(run_hook(self.S, 'rm "/private/tmp/claude-1/s/scratchpad/p q.txt"', agent="a1").returncode, 0)
+        self.assertEqual(run_hook(self.S, "rm '/tmp/probe.txt'", agent="a1").returncode, 0)
+
+    def test_recursive_rm_denied_even_in_scratch(self):
+        for c in ("rm -r /tmp/probe", "rm -rf /tmp/probe", "rm -fr /tmp/probe", "rm -Rf /tmp/probe", "rm --recursive /tmp/probe"):
+            r = run_hook(self.S, c, agent="a1")
+            self.assertEqual(r.returncode, 2, c)
+            self.assertIn("prompt even in scratch", r.stderr)
 
     def test_find_delete_denied(self):
         self.assertEqual(run_hook(self.S, "find . -name '*.bak' -delete", agent="a1").returncode, 2)
+        self.assertEqual(run_hook(self.S, "find -L . -type f -delete", agent="a1").returncode, 2)
+        self.assertEqual(run_hook(self.S, "find . -name '*.bak' -exec rm {} \\;", agent="a1").returncode, 2)
+
+    def test_mixed_quotes_do_not_hide_a_command(self):
+        self.assertEqual(run_hook(self.S, "echo \"it's\" && rm -rf 'x'", agent="a1").returncode, 2)
+        self.assertEqual(run_hook(self.S, "echo 'say \"hi\"' && rm -rf x", agent="a1").returncode, 2)
+        self.assertEqual(run_hook(self.S, "echo \"it's\" && rg 'rm -rf' src", agent="a1").returncode, 0)
+
+    def test_other_delete_spellings_denied(self):
+        for c in ("ls | xargs rm -f", "echo $(rm -rf src)", "if true; then rm -rf src; fi", "command rm src/x",
+                  "/bin/rm src/x", "\\rm src/x", "bash -c 'rm -rf src'", "timeout 300 rm -f src/x", "nohup rm src/x"):
+            self.assertEqual(run_hook(self.S, c, agent="a1").returncode, 2, c)
+
+    def test_git_global_options_normalized(self):
+        for c in ("git -C /wt checkout -- src/x.ts", "git -C /wt stash", "git -C /wt reset --hard HEAD",
+                  "git -C /wt worktree add ../x feat", "git -c core.pager=cat -C /wt restore f",
+                  "git checkout HEAD -- f", "git checkout main -- .", "git reset HEAD~1 --hard",
+                  "git switch --discard-changes", "timeout 300 git checkout -- ."):
+            self.assertEqual(run_hook(self.S, c, agent="a1").returncode, 2, c)
+        for c in ("git -C /wt stash list", "git stash show", "git -C /wt checkout -b feat", "git -C /wt status", "git -C /wt switch feat"):
+            self.assertEqual(run_hook(self.S, c, agent="a1").returncode, 0, c)
 
     def test_rm_inside_quoted_string_passes(self):
         self.assertEqual(run_hook(self.S, 'rg "rm -rf" src', agent="a1").returncode, 0)
@@ -84,6 +115,12 @@ class SdGuardTest(unittest.TestCase):
     def test_regex_brace_without_fixed_denied(self):
         self.assertEqual(run_hook(self.S, r"sd 'a\{' 'b' f").returncode, 2)
         self.assertEqual(run_hook(self.S, r"sd -F 'a\{' 'b' f").returncode, 0)
+
+    def test_bare_dollar_name_replacement_denied(self):
+        r = run_hook(self.S, "sd 'oldName' '$newName' f")
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("Edit tool", r.stderr)
+        self.assertEqual(run_hook(self.S, "sd -F 'oldName' '$newName' f").returncode, 0)
 
     def test_subagent_sd_always_denied(self):
         r = run_hook(self.S, "sd -F -- 'old' 'new' f", agent="a1")

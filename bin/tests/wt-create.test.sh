@@ -27,6 +27,22 @@ if [ -f "$WT/.env.local" ]; then ok; else bad "env file copied" "$out"; fi
 if [ -f "$WT/.setup-ran" ]; then ok; else bad "repo-owned worktree-setup.sh ran" "$out"; fi
 out=$("$BIN/wt-create" feat/x-1 --repo "$TMP/work/svc" 2>&1); rc=$?
 if [ "$rc" != 0 ] && printf '%s' "$out" | grep -q 'already exists'; then ok; else bad "refuses existing" "$out"; fi
+# Run from inside a worktree without --repo: the new worktree must still land beside the main checkout.
+out=$(cd "$WT" && "$BIN/wt-create" feat/z 2>&1); rc=$?
+if [ "$rc" = 0 ] && [ -e "$TMP/work/svc-worktrees/feat-z" ] && [ ! -e "$WT-worktrees" ]; then ok; else bad "from inside a worktree, resolves the main checkout" "rc=$rc $out"; fi
+# A branch that exists only on origin (the PR case) must be checked out tracking origin, not recreated off base.
+git clone -q --bare "$TMP/work/svc" "$TMP/work/origin.git"
+git -C "$TMP/work/svc" remote add origin "$TMP/work/origin.git"
+git -C "$TMP/work/svc" switch -q -c pr/remote-only
+echo remote > "$TMP/work/svc/remote.txt"; git -C "$TMP/work/svc" add remote.txt; git -C "$TMP/work/svc" -c user.email=t@e.invalid -c user.name=T -c commit.gpgsign=false commit -qm remote
+git -C "$TMP/work/svc" push -q origin pr/remote-only
+git -C "$TMP/work/svc" switch -q master; git -C "$TMP/work/svc" branch -q -D pr/remote-only
+REMOTE_SHA=$(git -C "$TMP/work/svc" rev-parse origin/pr/remote-only)
+out=$("$BIN/wt-create" pr/remote-only --repo "$TMP/work/svc" --base master --dir other 2>&1); rc=$?
+if [ "$rc" = 64 ] && printf '%s' "$out" | grep -q 'exists on origin'; then ok; else bad "refuses --base for a remote-only branch" "rc=$rc $out"; fi
+out=$("$BIN/wt-create" pr/remote-only --repo "$TMP/work/svc" 2>&1); rc=$?
+WT2="$TMP/work/svc-worktrees/pr-remote-only"
+if [ "$rc" = 0 ] && [ "$(git -C "$WT2" rev-parse HEAD 2>/dev/null)" = "$REMOTE_SHA" ] && [ "$(git -C "$WT2" rev-parse --abbrev-ref '@{upstream}' 2>/dev/null)" = "origin/pr/remote-only" ]; then ok; else bad "remote-only branch tracks origin" "rc=$rc $out"; fi
 cp -R "$TMP/work/svc" "/tmp/wtc-svc-$$"
 out=$("$BIN/wt-create" feat/y --repo "/tmp/wtc-svc-$$" 2>&1); rc=$?
 rm -rf "/tmp/wtc-svc-$$"

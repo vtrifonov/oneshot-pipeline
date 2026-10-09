@@ -77,8 +77,9 @@ while :; do
         gh pr comment "$PR" --repo "$REPO" --body "/ai-review" >/dev/null && { echo "posted /ai-review on #$PR (no-push wave: the bot audits only on a push or this comment)"; TRIGGERED=1; }
     fi
     if [ $(( $(date +%s) - start )) -ge "$MAX" ]; then
+        # The machine-readable AUDIT DONE line is always the LAST line of output.
+        [ "$TRIGGER" = 0 ] && echo "hint: a close with no push never triggers the audit; rerun with --trigger to post /ai-review once"
         echo "AUDIT DONE $line"
-        echo "hint: a close with no push never triggers the audit; rerun with --trigger to post /ai-review once"
         exit 2
     fi
     sleep "$INTERVAL"
