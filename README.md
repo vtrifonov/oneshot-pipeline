@@ -107,12 +107,18 @@ tell the pipeline to forget the frontend-design setting for the repo.
 | Helper | Purpose |
 |---|---|
 | `ci-wait` | Blocks until checks settle, or until a configured review check passes |
-| `review-wait` | Blocks until the AI reviewer decides on the current head |
-| `audit-wait` | Waits for bot audits of threads closed by the author |
+| `review-wait` | Blocks until the AI reviewer posts any APPROVED or CHANGES_REQUESTED review on the current head |
+| `audit-wait` | Waits for bot audits of threads closed by the author; `--trigger` posts the one `/ai-review` comment a no-push close needs |
 | `pr-threads` | Lists every unresolved thread with the code excerpt and related tests, in one call |
 | `pr-thread-close` | Replies, resolves, and confirms a thread is closed, in one call |
 | `rerun-failed` | Reruns flaky jobs and waits until GitHub stops showing the stale failure |
-| `verify-diff` | Scoped tsc, lint and tests for only the files that changed |
+| `verify-diff` | Scoped tsc, lint (oxlint or eslint, from the repo config) and tests for only the files that changed |
+| `wt-create` | Creates a worktree in the sibling `<repo>-worktrees/` directory and runs the repo-owned setup |
+| `stall-watch` | One watchdog per subagent dispatch, keyed on an unanswered tool call in its transcript |
+| `papercut` | Logs a slowdown with class, minutes and status; `papercut report` groups them |
+| `derived-check` | Flags lockfile, migration-timestamp and generated-file drift before a push |
+| `subagent-guard.sh` | Hook, subagents only: denies deletes outside scratch paths, heredocs, inline interpreters, git reverts and raw `git worktree add` |
+| `sd-guard.sh` | Hook: denies the `sd` forms that silently no-op (multi-line, `${…}`, `\z`) |
 | `block-full-suite.sh` | Optional hook that blocks full test-suite runs. Only the controller can override it |
 
 ## Quick start
@@ -185,22 +191,25 @@ The PR helpers read `owner/name` from the current checkout or from `--repo`.
 |---|---|---|
 | `CI_EXCLUDE_CHECKS` | `ci-wait` | Regex for checks that don't gate the PR (by default, every check gates) |
 | `CI_REVIEW_CHECK` | `ci-wait` | Regex for a review check that lets `ci-wait` return early. Passing it doesn't mean the PR is approved |
-| `AI_REVIEW_BOT` | `review-wait`, `audit-wait` | Login of your AI review bot |
-| `AI_REVIEW_JOB` | `review-wait`, `audit-wait` | Regex for the bot's job name, if needed |
+| `AI_REVIEW_BOT` | `review-wait` | Optional: forces the reviewer login. Otherwise the login of the newest review carrying an `ai-review:` marker on the head is used |
+| `AI_REVIEW_JOB` | `review-wait` | Regex for the bot's job name, if needed |
 
-`review-wait` and `audit-wait` expect a specific bot protocol. Approval reviews contain
-`ai-review:approval reviewed=<sha>`, and audit replies after a thread is closed contain
-`ai-review:author-resolve-audit`. No bot identity is built in. With other reviewers, the pipeline
-uses the standard GitHub review and check APIs.
+`review-wait` returns when the AI reviewer has posted any APPROVED or CHANGES_REQUESTED review on
+the PR's current head. `audit-wait` waits for `ai-review:author-resolve-audit` replies after a
+thread is closed; pass `--trigger` after a close that had no push so it posts the one `/ai-review`
+comment the bot needs. No bot identity is built in. With other reviewers, the pipeline uses the
+standard GitHub review and check APIs.
 
 </details>
 
 <details>
-<summary><strong>Scoped-verification hook</strong></summary>
+<summary><strong>Hooks</strong></summary>
 
-`block-full-suite.sh` only acts in repositories that have a `.scoped-verification` file at the Git
-root. Installing the file doesn't turn it on: registering the hook and using the controller-only
-`ALLOW_FULL_SUITE=1` override are covered in
+`link.sh` places three PreToolUse hooks in `~/.claude/hooks`. `subagent-guard.sh` (subagents only)
+and `sd-guard.sh` deny the command classes that have hung unattended runs on a permission prompt or
+silently no-op'd. `block-full-suite.sh` only acts in repositories that have a `.scoped-verification`
+file at the Git root. Installing the files doesn't turn them on: registration, the `rm` ask-rule
+narrowing and the controller-only `ALLOW_FULL_SUITE=1` override are covered in
 [`reference/distribution.md`](skills/oneshot-pipeline/reference/distribution.md).
 
 </details>

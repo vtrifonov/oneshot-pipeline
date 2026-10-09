@@ -42,19 +42,25 @@ The bundle does not include credentials or third-party skills. Before starting, 
 
 For Claude/GitHub runs, confirm pr-shepherd is discovered and the required helpers are executable in ~/.claude/bin. A missing helper is an installation problem: use this bundle or repository sources, never assume only the user can provide it. Other runtimes use the adapter's native equivalents and the bundled agent brief.
 
-## Optional scoped-verification hook
+## Hooks
 
-The installer places ~/.claude/hooks/block-full-suite.sh but does not change settings.json. This hook enforces scoped local verification in opted-in repositories; it is not required to execute the pipeline. Without it, obey the same scoped-check rule in the phase instructions.
+`link.sh` places three PreToolUse Bash hooks in ~/.claude/hooks but does not change settings.json:
 
-If wanted, merge this entry into the existing PreToolUse list in ~/.claude/settings.json, preserving all other settings:
+- `subagent-guard.sh` — subagents only: denies deletes outside scratch paths, heredocs/multi-line, inline `python -c`, git reverts, raw `git worktree add`. Each denial names the alternative. This is what stops an unattended run from hanging on a permission prompt.
+- `sd-guard.sh` — all sessions: denies the `sd` forms that silently no-op (multi-line, `${…}`, `\z`); subagents get no sd.
+- `block-full-suite.sh` — only in repositories with a `.scoped-verification` marker at the Git root; `ALLOW_FULL_SUITE=1` is the controller-only override. Opt in per repository by creating the marker file; no directory naming convention is required.
+
+Register them by merging into the existing PreToolUse list in ~/.claude/settings.json, preserving all other settings:
 
 ```json
 {
   "matcher": "Bash",
   "hooks": [
+    {"type": "command", "command": "bash \"$HOME/.claude/hooks/subagent-guard.sh\""},
+    {"type": "command", "command": "bash \"$HOME/.claude/hooks/sd-guard.sh\""},
     {"type": "command", "command": "bash \"$HOME/.claude/hooks/block-full-suite.sh\""}
   ]
 }
 ```
 
-The hook requires jq, git and perl. Opt in per repository by creating a .scoped-verification file at its Git root; no directory naming convention is required. Phase 8's main-controller override remains ALLOW_FULL_SUITE=1. Installing the file alone does not register the hook.
+Also narrow any `Bash(rm *)` entry in `permissions.ask` to recursive forms (`Bash(rm -r *)`, `Bash(rm -rf *)`): an ask rule prompts even when a hook allows, and a subagent cannot answer. The hooks require jq, perl and git. Installing the files alone does not register them.

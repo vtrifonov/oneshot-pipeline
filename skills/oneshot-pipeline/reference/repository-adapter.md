@@ -4,7 +4,7 @@ Read at Phase 0. Resolve settings from explicit user instructions, repository AG
 
 | Setting | Resolution |
 |---|---|
-| Repository, base branch, worktree root | Inspect target repository and remote HEAD. Follow documented conventions; otherwise use a sibling worktree named for the task. |
+| Repository, base branch, worktree root | Inspect target repository and remote HEAD. Create the worktree with ~/.claude/bin/wt-create <branch> --base <ref>: it uses the sibling <repo>-worktrees/ directory, links ../solution and node_modules when the Makefile needs them, copies gitignored env files and runs the repo's own .claude/worktree-setup.sh when present. |
 | Source/package roots and exclusions | Inspect tracked paths and workspace configuration, including generated/vendor exclusions. |
 | UI roots and design system | Tracked paths holding screens, components, styles and templates, plus the design system or component library they use. Used by the frontend-design pre-triage and named as the brief when it is on. |
 | Domain risks | Read applicable security, persistence, compatibility and deployment rules. |
@@ -13,9 +13,9 @@ Read at Phase 0. Resolve settings from explicit user instructions, repository AG
 | Review scopes | Lite: one independent correctness/testing review. Full: that review plus an independent security/architecture review focused on named risks. Use available review skills or brief fresh agents directly with the Finding contract. |
 | Runtime tools/models | Use available tools and model mappings; otherwise inherit. Use native agent status/results rather than assuming transcript locations. |
 | Durable artifacts | Default: docs/superpowers/reviews/<slug>/ in the worktree; ledger and per-pass metrics contain summaries and source references, never private transcripts or customer data. |
-| Scoped verification | verify-diff supports TypeScript/JavaScript projects using tsc, eslint and vitest. Other toolchains use equivalent scoped commands from CI. |
+| Scoped verification | verify-diff supports TypeScript/JavaScript projects using tsc, oxlint or eslint (picked from the repo config) and vitest; it prints what the push gate still owns. Other toolchains use equivalent scoped commands from CI. |
 | GitHub integration | Resolve owner/name from the current checkout or --repo. ci-wait, pr-threads and pr-thread-close work through authenticated gh. |
-| Optional bot protocol | review-wait requires AI_REVIEW_BOT and a bot that emits ai-review:approval reviewed=<sha>. audit-wait requires ai-review:author-resolve-audit replies. Use native review APIs when these protocols are absent. |
+| Optional bot protocol | review-wait returns on any APPROVED/CHANGES_REQUESTED review by the AI reviewer on the current head; it finds the reviewer from an ai-review: marker, or AI_REVIEW_BOT forces a login. audit-wait --trigger posts one /ai-review comment when a close had no push. Use native review APIs when these protocols are absent. |
 | Optional hook | block-full-suite.sh applies only to repositories opting in with a .scoped-verification marker at their root. Registration is per user. |
 
 Standing questions, where applicable:

@@ -7,6 +7,7 @@
 ### 8. Pre-push gates (mirror CI)
 - Run the repository adapter's actual CI gates from the controller. Inspect CI configuration for every owning package and independent type/build/browser-test scope; do not assume a root command covers them.
 - Scoped checks during implementation; full suite/build here. Run each gate once initially, rerunning only after relevant changes, failures or unresolved evidence.
+- Run `~/.claude/bin/derived-check --base <base>` before the gates: lockfiles changed since base need an install, duplicate migration timestamps need a rename and a cold test stack, tracked generated files need regeneration. Run cspell (and any per-package lint) from inside each package that has its own config, not only from the root.
 - If the optional scoped-verification hook is registered and the repository opted in, the controller may prefix the pre-PR full run with ALLOW_FULL_SUITE=1. Subagents use scoped checks. Keep each blocking operation within 300 seconds and use bounded background continuation for longer gates.
 - Re-evaluate all lane triggers mechanically against the committed base-relative diff. New matches upgrade the lane and add missing review coverage before push.
 - Sweep applicable repository rules: source-size limits, UI accessibility, deployment path filters, access-control invariants, documentation and rollout requirements. Resolve exact rules from the target repository.
