@@ -1,6 +1,6 @@
 ---
 name: oneshot-pipeline
-description: Use when the user asks to "execute as one shot", "run the playbook", "quick one shot" / "one shot, quick mode" (the reduced-review quick mode), "one shot without fable" / "no fable" (opus replaces fable everywhere), or wants a feature or fix taken from idea to a merge-ready PR without repeated check-ins. Run options the user leaves unnamed (quick vs standard, fable vs no fable) are asked once up front, with a recommendation based on the requirement.
+description: Use when the user asks to "execute as one shot", "run the playbook", "quick one shot" / "one shot, quick mode" (the reduced-review quick mode), "one shot without fable" / "no fable" (opus replaces fable everywhere), "with frontend design" / "no frontend design" (the UI design pass), or wants a feature or fix taken from idea to a merge-ready PR without repeated check-ins. Run options the user leaves unnamed (quick vs standard, fable vs no fable) are asked once up front, with a recommendation based on the requirement.
 ---
 
 # One-Shot Pipeline (idea → green merge-ready PR)
@@ -56,14 +56,35 @@ The two options are independent — all four combinations are valid (`quick+fabl
 
 Budget never moves the mode recommendation. Risk decides reviewer coverage, and cost is cut on the model tier first. So high risk with low budget is `standard+no-fable`, not quick.
 
+A third, conditional option — **frontend design** (`on` / `off`) — joins the same ask only when the request touches UI. See § Frontend design below.
+
 **How to ask:** ONE `AskUserQuestion` call with one question per unnamed option, in this order:
 1. **Mode** — "Quick mode?": `Standard` / `Quick`, recommendation first with "(Recommended)". Each description is one clause tied to *this* request (e.g. "no trust/persistence trigger, one package").
 2. **Model set** — "Use fable?": `Fable` / `No fable (opus)`, recommendation first. Put the budget line (`used_pct`, `working_days_left`, `per_day_pct`, `resets_at`) in the question text, so the user sees the numbers behind the recommendation.
+3. **Frontend design** (only when § Frontend design says to ask) — "Use frontend-design for the UI?": `Use it` / `Skip this run` / `Always for this repo` / `Never for this repo`, recommendation first.
 
 - **An option the invocation named** is left out of the call; never re-ask it.
 - **`fable` unavailable in the runtime:** never ask the model question; record `no-fable (unavailable)`.
 
-If the user replies "you pick" / "go with your recommendation", or the run is dispatched unattended with no options named, take the recommendations and say which you took in the Phase 1 approval line. Record each option's source (`named` / `asked` / `recommended`) in `/tmp/<slug>/timeline.txt` alongside `approved=`. Once set, an option is never silently changed; the only re-discussion is the Phase 1 checkpoint rule below.
+If the user replies "you pick" / "go with your recommendation", or the run is dispatched unattended with no options named, take the recommendations and say which you took in the Phase 1 approval line. Record each option's source (`named` / `asked` / `recommended` / `repo-pref`) in `/tmp/<slug>/timeline.txt` alongside `approved=`. Once set, an option is never silently changed; the only re-discussion is the Phase 1 checkpoint rule below.
+
+## Frontend design — asked when the request touches UI, remembered per repo
+
+`frontend-design:frontend-design` gives the design agent an aesthetic direction, a layout plan and a UI quality floor. It is optional: never a prerequisite, never a lane trigger.
+
+**When to ask.** Ask the third question at the Phase 0 ask only when ALL of these hold:
+1. The skill is listed among the runtime's available skills. Otherwise record `frontend_design=unavailable` and never mention it.
+2. The Phase 0 pre-triage sees a UI change: the request names or implies a screen, page, component, form, dialog, layout, styling or user-facing copy, or the touched area sits under the adapter's UI roots.
+3. The invocation did not name it ("with frontend design" / "no frontend design").
+4. `python3 <skill-dir>/scripts/repo-prefs.py get <owner/name> frontend_design` prints `unset`. `always` → on, `never` → off, both with source `repo-pref` and no question. Mention a stored preference in the Phase 1 approval line, so the user can lift it.
+
+**Recommendation.** `Use it` for a new screen or component, or a reshaped layout. `Skip this run` for a touch-up inside an existing screen (a label, spacing, one more field in an existing form). Each description is one clause tied to *this* request.
+
+**Remembering.** `Always for this repo` runs `repo-prefs.py set <owner/name> frontend_design always`, and `Never for this repo` runs it with `never`. Both also apply to this run. `Use it` and `Skip this run` store nothing. Only an explicit user answer writes a preference: never a recommendation, a "you pick", or an unattended run. "Forget the frontend-design setting for this repo" runs `repo-prefs.py clear <owner/name> frontend_design`.
+
+**Late discovery.** If Phase 0 saw no UI change but the agreed design does touch UI, the same conditions apply at the Phase 1 checkpoint: ask in that round, and if it turns on, the design agent applies the skill before the user approves.
+
+**When on.** Phase 1: the design agent applies the skill to the UI parts and writes a `## UI design` section into `design-brief.md` (layout as ASCII wireframes, empty/error/loading states, copy, and new tokens only where the repository has none). **The repository's design system, component library and existing screens are the brief.** The skill's push for distinctive aesthetics only operates where the repository leaves room. Phases 2 and 4 carry that section through as described in `reference/phases-0-5-setup-to-plan.md`. Phase 7 checks the UI tasks against it. Record `frontend_design=on|off|unavailable` with its source in `timeline.txt` and the run summary. The metrics schema does not change.
 
 ## Quick mode — the user decides, the controller recommends
 
@@ -117,7 +138,7 @@ Claude defaults below: pass `model` when that alias is available. Other runtimes
 
 ## Phase map — the one rule per phase you must not forget
 
-0. **Setup** — read repository adapter; resolve base branch, worktree root, domain risks, tools, and CI gates; new worktree + branch off latest resolved base; one implementation writer per worktree; reviewers own separate findings files. Last step: **ask any unnamed run option** (mode, model set) in one round, recommended choice first (§ Run options) — before the brainstorm dispatch.
+0. **Setup** — read repository adapter; resolve base branch, worktree root, domain risks, tools, and CI gates; new worktree + branch off latest resolved base; one implementation writer per worktree; reviewers own separate findings files. Last step: **ask any unnamed run option** (mode, model set, and frontend design when the request touches UI and no repo preference is stored) in one round, recommended choice first (§ Run options, § Frontend design) — before the brainstorm dispatch.
 1. **Brainstorm** — the ONLY planned design check-in (the Phase 0 run-options ask, when needed, is the other planned touchpoint). A **`fable` design agent** drafts questions and options; the controller relays them to the user and their answers back. Collect standing decisions, state the provisional lane, estimate the PR size against the size budget (Contract), and if it is over, propose the split or get the override in this same round. Then write `approved=` to `/tmp/<slug>/timeline.txt`.
 2. **Spec** — an **`opus` spec agent** writes the file under `docs/superpowers/specs/`; controller confirms the lane against it.
 3. **Panel on spec** — use review policy (**quick: two reviewers max**): intent, boundaries, invariants, failure behavior. Independent findings to files; source-backed disposition in shared ledger; targeted rechecks; scoped reference reads. Controller triages; the **`opus` spec agent applies accepted BLOCKER/MAJOR rewrites**.
@@ -162,4 +183,7 @@ Claude defaults below: pass `model` when that alias is available. Other runtimes
 | "Inline TDD — I'll write the code and add the test after" | The failing test first IS the trade for the skipped plan panel. Code-first forfeits it. |
 | "I implemented it inline, I can review it myself" | Never self-review. Phase 7 goes to a fresh `opus` subagent in quick mode exactly as in SDD. |
 | "Quick mode, so push past the bail-out" | ~400 source lines or ~8–10 files ends inline. Hand the rest to SDD, record `inline-tdd→sdd`, don't ask. |
+| "They picked Skip, so store never for this repo" | Only `Never for this repo` writes the preference. Skip covers this run alone. |
+| "No UI at Phase 0, so frontend design is settled" | If the agreed design touches UI, ask at the Phase 1 checkpoint. |
+| "frontend-design says be bold, so restyle the screen" | The repository's design system is the brief. Boldness only goes where the repo leaves room. |
 | "I remember what Phase N says" | You remember this summary. Read `reference/` for the phase before acting. |

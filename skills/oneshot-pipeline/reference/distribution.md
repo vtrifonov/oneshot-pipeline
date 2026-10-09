@@ -36,6 +36,7 @@ The bundle does not include credentials or third-party skills. Before starting, 
 
 - Python 3 for installation; bash, git, gh (authenticated to the target repository), jq, and standard Unix utilities for helpers. verify-diff also needs the target repo's Node/npm toolchain and installed test/lint/type tools.
 - `superpowers:brainstorming`, `superpowers:writing-plans`, `superpowers:subagent-driven-development`, and `superpowers:test-driven-development` where the phase uses them.
+- Optional: `frontend-design:frontend-design`. When it is installed, runs that touch UI offer it at Phase 0. Without it, UI work proceeds without the design pass. Per-repository answers are stored in `repo-prefs.local.json` in the skill directory (gitignored, per machine).
 - Independent correctness/testing review and, for the full lane, security/architecture review. Use available review skills or brief fresh reviewers directly with the Finding contract. Do not report an unavailable required gate as passed.
 - Native agent dispatch/status and user checkpoint tools. Phase 10b additionally requires the Claude Workflow integration; use Phase 10a if unavailable.
 

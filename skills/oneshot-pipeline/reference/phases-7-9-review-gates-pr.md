@@ -1,5 +1,6 @@
 ### 7. Code review
 - Lite: fresh independent correctness/testing reviewer. Full: that reviewer plus a separate security/architecture reviewer for the named risks. Apply available review skills or brief agents directly; use the Finding contract and separate findings files.
+- **Frontend design on:** the correctness/testing reviewer also checks the UI tasks against the spec's UI design section and its quality floor. When a browser tool is available, it renders the changed screens and attaches screenshots to its findings. A taste disagreement without a concrete broken state, flow or accessibility failure is MINOR.
 - Validate premises and deduplicate. Fix accepted BLOCKER/MAJOR findings, with meaningful regression tests for behavioral bugs. MINOR follows the contract.
 - Fix sibling call sites and coupled surfaces sharing the same defect; centralize a shared invariant where appropriate.
 

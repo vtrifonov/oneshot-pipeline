@@ -82,10 +82,15 @@ with one reference file per phase in [`reference/`](skills/oneshot-pipeline/refe
 |---|---|---|
 | Mode | `standard` / `quick` | Quick caps the spec panel at two reviewers, skips the plan panel, and implements inline with TDD. Code review still runs in a fresh subagent |
 | Model set | `fable` / `no-fable` | No-fable runs the design, plan and wave-fixer roles on `opus` |
+| Frontend design | `on` / `off` | Offered only when the request touches UI and [frontend-design](https://github.com/anthropics/claude-plugins-official/tree/main/plugins/frontend-design) is installed. The design agent adds a UI design section (wireframes, states, copy, accessibility floor) that follows the repo's design system and carries through spec, plan and code review |
 
-Name the options when you start a run ("quick one shot", "one shot without fable"). If you don't,
-the pipeline asks once and recommends a choice: risk sets the mode, and your remaining weekly usage
-sets the model set.
+Name the options when you start a run ("quick one shot", "one shot without fable", "with frontend
+design"). If you don't, the pipeline asks once and recommends a choice: risk sets the mode, your
+remaining weekly usage sets the model set, and the size of the UI change sets frontend design.
+
+The frontend-design question also offers **Always for this repo** and **Never for this repo**. Those
+answers are remembered per repository on your machine, so you aren't asked again there. To reset,
+tell the pipeline to forget the frontend-design setting for the repo.
 
 ## What's inside
 
@@ -235,6 +240,7 @@ files. The prerequisites above still apply.
 ```sh
 python3 bin/tests/oneshot-package.test.py
 python3 bin/tests/public-portability.test.py
+python3 bin/tests/repo-prefs.test.py
 bash bin/tests/run.sh
 ```
 

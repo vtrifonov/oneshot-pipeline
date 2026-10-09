@@ -6,6 +6,7 @@ Read at Phase 0. Resolve settings from explicit user instructions, repository AG
 |---|---|
 | Repository, base branch, worktree root | Inspect target repository and remote HEAD. Follow documented conventions; otherwise use a sibling worktree named for the task. |
 | Source/package roots and exclusions | Inspect tracked paths and workspace configuration, including generated/vendor exclusions. |
+| UI roots and design system | Tracked paths holding screens, components, styles and templates, plus the design system or component library they use. Used by the frontend-design pre-triage and named as the brief when it is on. |
 | Domain risks | Read applicable security, persistence, compatibility and deployment rules. |
 | Verification gates | Derive exact commands from CI. Include independent packages, type checks, browser tests and build gates where applicable. |
 | Review completion | Required checks, reviewers and approvals for the current head. Never silently exclude a required gate. |
