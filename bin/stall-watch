@@ -1,0 +1,108 @@
+#!/usr/bin/env python3
+"""stall-watch --session <dir> --agent <id> [--threshold S] [--max S] [--interval S] [--worktree <path> --base <sha>]
+
+One watchdog for every dispatch. Signal: the agent's transcript, not worktree
+writes. A tool_use with no tool_result after it is the permission-prompt
+signature; a transcript that stops advancing is a dead or idle agent. Ages are
+measured from the event itself, so a stall that began before this watcher was
+armed is reported on the first poll. Always pass --agent: without it the
+newest transcript by mtime is watched, which may belong to a finished agent.
+Exits on the first event (the harness only notifies on exit); the controller re-arms.
+
+  exit 0  COMMIT <sha>            worktree HEAD moved from --base
+  exit 2  TIMEOUT                  --max reached, nothing happened
+  exit 3  STALL agent=<id> reason=unanswered-tool-call tool=<name> age=<s>
+          STALL agent=<id> reason=idle age=<s>
+  exit 64 usage
+"""
+import argparse
+import datetime
+import glob
+import json
+import os
+import subprocess
+import sys
+import time
+
+
+def parse_ts(s):
+    return datetime.datetime.strptime(s[:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=datetime.timezone.utc).timestamp()
+
+
+def pending_tool_call(path):
+    """Return (ts, name) of the last tool_use with no later tool_result, else None."""
+    pending = {}
+    with open(path, errors="replace") as f:
+        for line in f:
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            content = (row.get("message") or {}).get("content") or []
+            if not isinstance(content, list):
+                continue
+            for block in content:
+                if not isinstance(block, dict):
+                    continue
+                if block.get("type") == "tool_use":
+                    pending[block.get("id")] = (parse_ts(row.get("timestamp", "1970-01-01T00:00:00")), block.get("name", "?"))
+                elif block.get("type") == "tool_result":
+                    pending.pop(block.get("tool_use_id"), None)
+    if not pending:
+        return None
+    return max(pending.values())
+
+
+def newest_transcript(session, agent):
+    pattern = os.path.join(session, "subagents", f"agent-{agent or '*'}.jsonl")
+    files = glob.glob(pattern)
+    if not files:
+        return None
+    return max(files, key=os.path.getmtime)
+
+
+def head(worktree):
+    r = subprocess.run(["git", "-C", worktree, "rev-parse", "HEAD"], capture_output=True, text=True)
+    return r.stdout.strip() if r.returncode == 0 else ""
+
+
+def main():
+    ap = argparse.ArgumentParser(add_help=False)
+    ap.add_argument("--session", required=True)
+    ap.add_argument("--agent")
+    ap.add_argument("--threshold", type=float, default=420)
+    ap.add_argument("--max", type=float, default=7200)
+    ap.add_argument("--interval", type=float, default=30)
+    ap.add_argument("--worktree")
+    ap.add_argument("--base")
+    try:
+        a = ap.parse_args()
+    except SystemExit:
+        print(__doc__, file=sys.stderr); sys.exit(64)
+    start = time.time()
+    while True:
+        now = time.time()
+        if a.worktree and a.base:
+            h = head(a.worktree)
+            if h and h != a.base:
+                print(f"COMMIT {h}"); sys.exit(0)
+        path = newest_transcript(a.session, a.agent)
+        if path:
+            agent = os.path.basename(path)[len("agent-"):-len(".jsonl")]
+            pend = pending_tool_call(path)
+            mtime = os.path.getmtime(path)
+            if pend:
+                age = now - pend[0]
+                if age >= a.threshold:
+                    print(f"STALL agent={agent} reason=unanswered-tool-call tool={pend[1]} age={int(age)} transcript={path}"); sys.exit(3)
+            else:
+                age = now - mtime
+                if age >= a.threshold:
+                    print(f"STALL agent={agent} reason=idle age={int(age)} transcript={path}"); sys.exit(3)
+        if now - start >= a.max:
+            print(f"TIMEOUT after {int(now - start)}s" + (f" agent={a.agent}" if a.agent else "")); sys.exit(2)
+        time.sleep(a.interval)
+
+
+if __name__ == "__main__":
+    main()

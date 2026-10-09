@@ -244,6 +244,7 @@ rm "$REPO/.eslintrc.js"
 # ---------------------------------------------------------------- hooks
 if python3 "$BIN/tests/hooks.test.py" >"$TMP/hooks.out" 2>&1; then ok; else bad "hooks.test.py" "$(cat "$TMP/hooks.out")"; fi
 if bash "$BIN/tests/wt-create.test.sh" >"$TMP/wt.out" 2>&1; then ok; else bad "wt-create.test.sh" "$(cat "$TMP/wt.out")"; fi
+if python3 "$BIN/tests/stall-watch.test.py" >"$TMP/sw.out" 2>&1; then ok; else bad "stall-watch.test.py" "$(cat "$TMP/sw.out")"; fi
 
 echo "passed=$pass failed=$fail"
 [ "$fail" = 0 ]
