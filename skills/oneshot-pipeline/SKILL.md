@@ -1,6 +1,6 @@
 ---
 name: oneshot-pipeline
-description: Use when the user asks to "execute as one shot", "run the playbook", "quick one shot" / "one shot, quick mode" (the reduced-review quick mode), "one shot without fable" / "no fable" (opus replaces fable everywhere), or wants a feature or fix taken from idea to a merge-ready PR without repeated check-ins.
+description: Use when the user asks to "execute as one shot", "run the playbook", "quick one shot" / "one shot, quick mode" (the reduced-review quick mode), "one shot without fable" / "no fable" (opus replaces fable everywhere), or wants a feature or fix taken from idea to a merge-ready PR without repeated check-ins. Run options the user leaves unnamed (quick vs standard, fable vs no fable) are asked once up front, with a recommendation based on the requirement.
 ---
 
 # One-Shot Pipeline (idea → green merge-ready PR)
@@ -39,9 +39,35 @@ Trigger categories: authorization/trust boundaries; persistence shape/queries/tr
 | 7 | `correctness/testing review` AND security/architecture review | `correctness/testing review` only |
 | 8–11 | Identical | Identical |
 
-## Quick mode — the user names it, the controller never picks it
+## Run options — named, or asked once with a recommendation
 
-**Opt-in only.** Quick mode is on when the invocation says so ("quick one shot", "one shot, quick mode", "run the playbook quick"). It is a cost/latency choice, never a risk call: the controller never selects it, never infers it from "this feels small", and never silently drops it once set. It is **orthogonal to the lane** — a run is `lane=full, mode=quick` or `lane=lite, mode=quick` just as readily.
+Two run options are the user's to set: **mode** (`standard` / `quick`) and **model set** (`fable` / `no-fable`). Either can be named at invocation ("quick one shot", "one shot, quick mode", "run the playbook quick"; "without fable", "no fable", "opus only"). Whatever the invocation leaves unnamed is **asked once, at the end of Phase 0, before the brainstorm agent is dispatched** (the model set decides that agent's model). Never assume a default silently, and never re-ask an option the user named.
+
+The two options are independent — all four combinations are valid (`quick+fable`, `quick+no-fable`, `standard+fable`, `standard+no-fable`). Each is recommended from its own input:
+
+1. **Risk → mode.** Pre-triage the raw request against the lane trigger categories above (a read *before* the provisional one: the request text, the files it names, a quick look at the touched area; no design work).
+   - **quick** when the request reads as lite lane: one package, no trigger category in sight, ≲300 source lines, concrete requirements (a bug with a repro, a feature mirroring an existing pattern, a config/copy change).
+   - **standard** when any trigger category is plausible (auth/trust, persistence/migration, concurrency, deploy/infra, public contract, deploy-safety rule), more than one package, >300 lines, or a requirement vague enough that the spec panel will earn its keep.
+2. **Weekly budget → model set.** Run `python3 <skill-dir>/scripts/usage-budget.py`. It reads the seven-day usage window and spreads what is left over the working days (Mon–Fri) until the reset. The target is **≤ 20% of the weekly limit per working day**, so `per_day_pct` is how much this day can spend while still staying on pace.
+   - `pace=ample` (≥ 20%/day) → **fable**.
+   - `pace=tight` (10–20%/day) → **fable** only if the design space is open (several viable approaches, cross-cutting task ordering, a contract/security surface where the wave fixer will dispute bot claims); otherwise **no-fable**.
+   - `pace=low` (< 10%/day) → **no-fable**. On a full-lane-looking request, also say in the option description that waiting until the reset (`resets_at`) is an option.
+   - `source=unavailable` → fall back to the design-space rule alone, and say "budget unknown" in the description. The user can state the usage; rerun with `--used PCT --resets ISO8601`.
+
+Budget never moves the mode recommendation. Risk decides reviewer coverage, and cost is cut on the model tier first. So high risk with low budget is `standard+no-fable`, not quick.
+
+**How to ask:** ONE `AskUserQuestion` call with one question per unnamed option, in this order:
+1. **Mode** — "Quick mode?": `Standard` / `Quick`, recommendation first with "(Recommended)". Each description is one clause tied to *this* request (e.g. "no trust/persistence trigger, one package").
+2. **Model set** — "Use fable?": `Fable` / `No fable (opus)`, recommendation first. Put the budget line (`used_pct`, `working_days_left`, `per_day_pct`, `resets_at`) in the question text, so the user sees the numbers behind the recommendation.
+
+- **An option the invocation named** is left out of the call; never re-ask it.
+- **`fable` unavailable in the runtime:** never ask the model question; record `no-fable (unavailable)`.
+
+If the user replies "you pick" / "go with your recommendation", or the run is dispatched unattended with no options named, take the recommendations and say which you took in the Phase 1 approval line. Record each option's source (`named` / `asked` / `recommended`) in `/tmp/<slug>/timeline.txt` alongside `approved=`. Once set, an option is never silently changed; the only re-discussion is the Phase 1 checkpoint rule below.
+
+## Quick mode — the user decides, the controller recommends
+
+Quick mode is on when the invocation names it or the user picks it at the Phase 0 ask. It is a cost/latency choice, never a risk call: the controller may *recommend* it but never *selects* it on its own (except via the explicit "you pick" path above), and never silently drops it once set. It is **orthogonal to the lane** — a run is `lane=full, mode=quick` or `lane=lite, mode=quick` just as readily.
 
 It overrides exactly three things and nothing else:
 
@@ -53,7 +79,7 @@ It overrides exactly three things and nothing else:
 
 Everything else is identical: lane triage still runs all three evaluations, Phase 7 still follows the lane (lite = `correctness/testing review`; full = both review scopes), Phases 8–11 unchanged. **Phase 7 still runs in a fresh `opus` subagent** — in quick mode the controller wrote the code, so self-review is worth nothing.
 
-**The one conversation quick mode adds lands at the Phase 1 checkpoint, where the user is already present:** if provisional triage matches a trust-boundary, persistence, concurrency, or deploy-safety trigger, name the trigger in that same round and ask whether to keep quick mode. They may keep it — record it and go. After the checkpoint it never blocks again. A full-lane upgrade confirmed at Phase 2, or mechanically at Phase 8, does **not** retro-add the plan panel (the plan is already implemented by then); it records `mode=quick` + `lane=lite→full` and adds one line to the PR body: "Plan was not panel-reviewed (quick mode)."
+**The one re-discussion lands at the Phase 1 checkpoint, where the user is already present:** if provisional triage (now against the agreed design) matches a trust-boundary, persistence, concurrency, or deploy-safety trigger, name the trigger in that same round and ask whether to keep quick mode. They may keep it — record it and go. Likewise, if the agreed design flips the Phase 0 recommendation for a `recommended`-source option, say so in that round and let them switch; a `named` or `asked` option is only re-raised for the quick-mode triggers above. After the checkpoint it never blocks again. A full-lane upgrade confirmed at Phase 2, or mechanically at Phase 8, does **not** retro-add the plan panel (the plan is already implemented by then); it records `mode=quick` + `lane=lite→full` and adds one line to the PR body: "Plan was not panel-reviewed (quick mode)."
 
 Record `mode` (`standard` / `quick`) in the metrics row.
 
@@ -71,7 +97,7 @@ Controller disposition: validate premises and deduplicate first; mark accepted/r
 
 ## Model matrix
 
-Claude defaults below: pass `model` when that alias is available. Other runtimes use the adapter's available model mapping or inherit; never pass unavailable aliases. **No-fable mode (opt-in, the user names it):** when the invocation says "without fable", "no fable" or "opus only", every `fable` row below runs on `opus` instead — brainstorm, plan author/reviser and wave fixer (10a dispatch `model: opus`; 10b pass `fixModel: 'opus'` in the Workflow args). Nothing else changes: same agents, same sole-writer ownership, same phases. Like quick mode it is orthogonal to lane and mode, never inferred, never dropped mid-run; record it by suffixing the metrics row's `mode` value with `+nofable` (`standard+nofable`, `quick+nofable`) — the 19-column schema stays fixed. Wherever a phase reference says `fable`, read "the plan/design/fixer model". **If `fable` is not available in the runtime, the brainstorm, plan and wave-fixer agents fall back to `opus`** — they stay subagents either way, because the phase structure (design brief file, one sole writer per artifact) is what makes revisions cheap, not the model alias. `fable` goes where judgment beats prose: design exploration, task decomposition, and disputing reviewer claims; it is never used on parallel panels, where tier cost multiplies.
+Claude defaults below: pass `model` when that alias is available. Other runtimes use the adapter's available model mapping or inherit; never pass unavailable aliases. **No-fable mode (the user's choice — named at invocation or picked at the Phase 0 ask, see § Run options):** when it is on, every `fable` row below runs on `opus` instead — brainstorm, plan author/reviser and wave fixer (10a dispatch `model: opus`; 10b pass `fixModel: 'opus'` in the Workflow args). Nothing else changes: same agents, same sole-writer ownership, same phases. Like quick mode it is orthogonal to lane and mode, recommended but never self-selected, never dropped mid-run; record it by suffixing the metrics row's `mode` value with `+nofable` (`standard+nofable`, `quick+nofable`) — the 19-column schema stays fixed. Wherever a phase reference says `fable`, read "the plan/design/fixer model". **If `fable` is not available in the runtime, the brainstorm, plan and wave-fixer agents fall back to `opus`** — they stay subagents either way, because the phase structure (design brief file, one sole writer per artifact) is what makes revisions cheap, not the model alias. `fable` goes where judgment beats prose: design exploration, task decomposition, and disputing reviewer claims; it is never used on parallel panels, where tier cost multiplies.
 
 | Work | Model | Why |
 |---|---|---|
@@ -91,8 +117,8 @@ Claude defaults below: pass `model` when that alias is available. Other runtimes
 
 ## Phase map — the one rule per phase you must not forget
 
-0. **Setup** — read repository adapter; resolve base branch, worktree root, domain risks, tools, and CI gates; new worktree + branch off latest resolved base; one implementation writer per worktree; reviewers own separate findings files.
-1. **Brainstorm** — the ONLY planned check-in. A **`fable` design agent** drafts questions and options; the controller relays them to the user and their answers back. Collect standing decisions, state the provisional lane, estimate the PR size against the size budget (Contract), and if it is over, propose the split or get the override in this same round. Then write `approved=` to `/tmp/<slug>/timeline.txt`.
+0. **Setup** — read repository adapter; resolve base branch, worktree root, domain risks, tools, and CI gates; new worktree + branch off latest resolved base; one implementation writer per worktree; reviewers own separate findings files. Last step: **ask any unnamed run option** (mode, model set) in one round, recommended choice first (§ Run options) — before the brainstorm dispatch.
+1. **Brainstorm** — the ONLY planned design check-in (the Phase 0 run-options ask, when needed, is the other planned touchpoint). A **`fable` design agent** drafts questions and options; the controller relays them to the user and their answers back. Collect standing decisions, state the provisional lane, estimate the PR size against the size budget (Contract), and if it is over, propose the split or get the override in this same round. Then write `approved=` to `/tmp/<slug>/timeline.txt`.
 2. **Spec** — an **`opus` spec agent** writes the file under `docs/superpowers/specs/`; controller confirms the lane against it.
 3. **Panel on spec** — use review policy (**quick: two reviewers max**): intent, boundaries, invariants, failure behavior. Independent findings to files; source-backed disposition in shared ledger; targeted rechecks; scoped reference reads. Controller triages; the **`opus` spec agent applies accepted BLOCKER/MAJOR rewrites**.
 4. **Plan** — a **`fable` plan agent** applies `superpowers:writing-plans`; coupled surfaces become explicit tasks, invariant matrix becomes the TDD list; under 2,000 lines or split into parts.
@@ -127,7 +153,10 @@ Claude defaults below: pass `model` when that alias is available. Other runtimes
 | "It's 4,600 lines, but the playbook pre-approved the push" | Pre-approval stops at 4,000 lines / 75 files / 200 KB. Past that, PushNotification + ask with the numbers and a split. |
 | "I'll batch this fix with whatever the review finds next" | Batch the PUSH, never the WORK. Implement, test and commit a triaged fix immediately; hold only `git push`. |
 | "Nothing to do but wait for the review" | Ask what the worktree is owed first: a triaged FIX, a parked doc correction, a queued cleanup. Idle-waiting is right only when the answer is genuinely nothing. |
-| "This one feels small, I'll run it quick" | Quick mode is the user's word, never the controller's inference. Unasked, run standard. |
+| "This one feels small, I'll run it quick" | Recommend it, don't pick it. Unnamed options get one Phase 0 ask with the recommendation first; only "you pick" or an unattended dispatch lets the recommendation stand. |
+| "They didn't say, so standard + fable is the default" | Unnamed is not a default. Ask once at Phase 0, with a request-specific recommendation. |
+| "Budget is tight, so recommend quick" | Budget picks the model tier, risk picks the mode. Tight budget + risky request = `standard+no-fable`. |
+| "I'll ask about quick mode after the brainstorm" | The model set picks the brainstorm agent's model, so both options are asked before it is dispatched. |
 | "Quick mode, so skip the spec panel too" | Quick caps the spec panel at two reviewers; it never takes it to zero. The spec is the only artifact still challenged. |
 | "Quick mode, so no plan needed" | Phase 5 is skipped, Phase 4 is not. The plan is the task list and the TDD matrix the inline implementation runs off. |
 | "Inline TDD — I'll write the code and add the test after" | The failing test first IS the trade for the skipped plan panel. Code-first forfeits it. |
