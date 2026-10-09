@@ -191,5 +191,8 @@ out=$(cd "$REPO" && "$BIN/verify-diff" --dry-run --no-tests --no-lint --files li
 check "verify-diff: --no-tests --no-lint leaves tsc only" 0 "$rc" "$out" 'tsc:'
 if printf '%s' "$out" | grep -qE 'eslint|vitest'; then bad "verify-diff --no-tests --no-lint" "$out"; else ok; fi
 
+# ---------------------------------------------------------------- hooks
+if python3 "$BIN/tests/hooks.test.py" >"$TMP/hooks.out" 2>&1; then ok; else bad "hooks.test.py" "$(cat "$TMP/hooks.out")"; fi
+
 echo "passed=$pass failed=$fail"
 [ "$fail" = 0 ]

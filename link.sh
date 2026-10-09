@@ -71,7 +71,9 @@ link_dir_of skills   "$skills_target"   '*'
 link_dir_of agents   "$agents_target"   '*.md'
 link_dir_of bin      "$bin_target"      '*'
 mkdir -p "$hooks_target"
-link_one "${repo_root}/bin/block-full-suite.sh" "${hooks_target}/block-full-suite.sh"
+for hook in block-full-suite.sh subagent-guard.sh sd-guard.sh; do
+  link_one "${repo_root}/bin/${hook}" "${hooks_target}/${hook}"
+done
 
 printf '\n%d linked, %d skipped\n' "$linked" "$skipped"
 printf 'Restart Claude Code to load skills and pr-shepherd. Optional hook registration: skills/oneshot-pipeline/reference/distribution.md\n'
