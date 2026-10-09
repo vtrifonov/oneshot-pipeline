@@ -10,7 +10,9 @@
 #           and the errors that sit in CHANGED files separately — a stale
 #           workspace dist or a package with a non-zero baseline must not read
 #           as your regression.
-#   eslint  changed .ts/.tsx/.js/.mjs files only
+#   lint    changed .ts/.tsx/.js/.mjs files only, with the repo's own linter:
+#           oxlint when .oxlintrc.json exists, else eslint when an eslint
+#           config exists, else skipped (says so; the repo's lint target owns it)
 #   vitest  changed test files + tests co-located with changed sources + tests
 #           that import a changed source (basename grep). *.test.tsx run under
 #           vitest.config.browser.ts (npm test never runs them). --related swaps
@@ -105,11 +107,25 @@ if [ "$TSC" = 1 ] && [ ${#CFGS[@]} -gt 0 ]; then
 fi
 
 if [ "$LINT" = 1 ] && [ ${#LINTABLE[@]} -gt 0 ]; then
-    if [ "$DRY" = 1 ]; then run "eslint" npx eslint --quiet "${LINTABLE[@]}"
-    else
-        out=$(timeout 300 npx eslint --quiet "${LINTABLE[@]}" 2>&1); rc=$?
-        if [ "$rc" = 0 ]; then echo "eslint: clean (${#LINTABLE[@]} files)"; else echo "eslint: problems:"; printf '%s\n' "$out" | grep -vE '^\s*$' | head -40 | sed 's/^/  /'; FAIL=1; fi
-    fi
+    has_eslint_config() { local f; for f in eslint.config.* .eslintrc .eslintrc.*; do [ -e "$f" ] && return 0; done; return 1; }
+    LINTER=""
+    if [ -f .oxlintrc.json ]; then LINTER=oxlint
+    elif has_eslint_config; then LINTER=eslint; fi
+    case "$LINTER" in
+        oxlint)
+            if [ "$DRY" = 1 ]; then run "oxlint" npx oxlint --deny-warnings --type-aware "${LINTABLE[@]}"
+            else
+                out=$(timeout 300 npx oxlint --deny-warnings --type-aware "${LINTABLE[@]}" 2>&1); rc=$?
+                if [ "$rc" = 0 ]; then echo "oxlint: clean (${#LINTABLE[@]} files)"; else echo "oxlint: problems:"; printf '%s\n' "$out" | grep -vE '^\s*$' | head -40 | sed 's/^/  /'; FAIL=1; fi
+            fi ;;
+        eslint)
+            if [ "$DRY" = 1 ]; then run "eslint" npx eslint --quiet "${LINTABLE[@]}"
+            else
+                out=$(timeout 300 npx eslint --quiet "${LINTABLE[@]}" 2>&1); rc=$?
+                if [ "$rc" = 0 ]; then echo "eslint: clean (${#LINTABLE[@]} files)"; else echo "eslint: problems:"; printf '%s\n' "$out" | grep -vE '^\s*$' | head -40 | sed 's/^/  /'; FAIL=1; fi
+            fi ;;
+        *) echo "lint: skipped (no eslint/oxlint config found; run the repo's own lint target)" ;;
+    esac
 fi
 
 if [ "$TESTS" = 1 ]; then
@@ -175,6 +191,7 @@ $(importers_of "$src")
     fi
 fi
 
+echo "verify-diff is scoped: tsc per owning tsconfig, lint on changed files, selected tests. The push gate is the repo's own (make compile / make lint / cspell per package); run it before pushing."
 if [ "$DRY" = 1 ]; then exit 0; fi
 if [ "$FAIL" = 0 ]; then echo "verify-diff: ALL CLEAN"; else echo "verify-diff: FAILURES above"; fi
 exit $FAIL

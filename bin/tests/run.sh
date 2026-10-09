@@ -208,11 +208,11 @@ if grep -qE 'replies|resolveReviewThread' "$GH_LOG"; then bad "pr-thread-close m
 out=$(cd "$REPO" && "$BIN/verify-diff" --dry-run --files lib/util.ts lib/__tests__/util.test.ts apps/web/src/page.tsx packages/core/src/index.ts 2>&1); rc=$?
 check "verify-diff: one tsc per owning tsconfig" 0 "$rc" "$out" \
     'tsc: npx tsc --noEmit -p \./tsconfig\.json' 'tsc: npx tsc --noEmit -p apps/web/tsconfig\.json' 'tsc: npx tsc --noEmit -p packages/core/tsconfig\.json' \
-    'eslint: npx eslint --quiet lib/util\.ts lib/__tests__/util\.test\.ts apps/web/src/page\.tsx packages/core/src/index\.ts' \
+    'lint: skipped' \
     'vitest\(unit\): env CI=true npx vitest run lib/__tests__/util\.test\.ts --passWithNoTests' \
     'vitest\(browser\): env CI=true npx vitest run apps/web/src/page\.test\.tsx --passWithNoTests --reporter=dot --config vitest\.config\.browser\.ts'
 n=$(printf '%s\n' "$out" | grep -c 'tsc: npx tsc'); if [ "$n" = 3 ]; then ok; else bad "verify-diff dedupes tsconfigs (got $n)" "$out"; fi
-n=$(printf '%s\n' "$out" | grep -o 'util\.test\.ts' | wc -l | tr -d ' '); if [ "$n" = 2 ]; then ok; else bad "verify-diff lists a test once even when changed AND co-located (eslint + vitest = 2 mentions, got $n)" "$out"; fi
+n=$(printf '%s\n' "$out" | grep -o 'util\.test\.ts' | wc -l | tr -d ' '); if [ "$n" = 1 ]; then ok; else bad "verify-diff lists a test once even when changed AND co-located (vitest only, lint skipped = 1 mention, got $n)" "$out"; fi
 out=$(cd "$REPO" && "$BIN/verify-diff" --dry-run --files lib/util.ts 2>&1); rc=$?
 check "verify-diff: source change selects co-located/importing test, no browser run" 0 "$rc" "$out" 'vitest\(unit\): .* lib/__tests__/util\.test\.ts'
 if printf '%s' "$out" | grep -q 'vitest(browser)'; then bad "verify-diff: no browser run for .ts-only" "$out"; else ok; fi
@@ -224,12 +224,22 @@ out=$(cd "$REPO" && "$BIN/verify-diff" --dry-run --related --files lib/util.ts a
 check "verify-diff --related uses vitest related" 0 "$rc" "$out" 'vitest\(unit\): env CI=true npx vitest related lib/util\.ts apps/web/src/page\.tsx --run' 'vitest\(browser\): env CI=true npx vitest related lib/util\.ts apps/web/src/page\.tsx --run .*--config vitest\.config\.browser\.ts'
 out=$(cd "$REPO" && "$BIN/verify-diff" --dry-run --files README.md docs/x.md 2>&1); rc=$?
 check "verify-diff: no source change is a clean no-op" 0 "$rc" "$out" 'no changed source or test files'
-echo "// changed" >> "$REPO/lib/util.ts"; echo "export const n = 2;" > "$REPO/lib/new.ts"
+echo "// changed" >> "$REPO/lib/util.ts"; echo "export const n = 2;" > "$REPO/lib/new.ts"; echo '{}' > "$REPO/.oxlintrc.json"
 out=$(cd "$REPO" && "$BIN/verify-diff" --dry-run 2>&1); rc=$?
-check "verify-diff: default set = working tree incl. untracked" 0 "$rc" "$out" '2 source, 0 test' 'lib/new\.ts' 'lib/util\.ts'
+check "verify-diff: default set = working tree incl. untracked" 0 "$rc" "$out" '2 source, 0 test' 'oxlint: .*lib/new\.ts' 'oxlint: .*lib/util\.ts'
+rm "$REPO/.oxlintrc.json"
 out=$(cd "$REPO" && "$BIN/verify-diff" --dry-run --no-tests --no-lint --files lib/util.ts 2>&1); rc=$?
 check "verify-diff: --no-tests --no-lint leaves tsc only" 0 "$rc" "$out" 'tsc:'
 if printf '%s' "$out" | grep -qE 'eslint|vitest'; then bad "verify-diff --no-tests --no-lint" "$out"; else ok; fi
+out=$(cd "$REPO" && "$BIN/verify-diff" --dry-run --files lib/util.ts 2>&1); rc=$?
+check "verify-diff: no lint config → skipped" 0 "$rc" "$out" 'lint: skipped' 'push gate is the repo'
+echo '{}' > "$REPO/.oxlintrc.json"
+out=$(cd "$REPO" && "$BIN/verify-diff" --dry-run --files lib/util.ts 2>&1); rc=$?
+check "verify-diff: oxlint when .oxlintrc.json exists" 0 "$rc" "$out" 'oxlint: npx oxlint --deny-warnings --type-aware lib/util\.ts'
+rm "$REPO/.oxlintrc.json"; echo 'module.exports = {}' > "$REPO/.eslintrc.js"
+out=$(cd "$REPO" && "$BIN/verify-diff" --dry-run --files lib/util.ts 2>&1); rc=$?
+check "verify-diff: eslint when an eslint config exists" 0 "$rc" "$out" 'eslint: npx eslint --quiet lib/util\.ts'
+rm "$REPO/.eslintrc.js"
 
 # ---------------------------------------------------------------- hooks
 if python3 "$BIN/tests/hooks.test.py" >"$TMP/hooks.out" 2>&1; then ok; else bad "hooks.test.py" "$(cat "$TMP/hooks.out")"; fi
