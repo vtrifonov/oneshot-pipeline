@@ -37,8 +37,11 @@ case "$*" in
         elif printf '%s' "$q" | grep -q 'after: "CUR1"'; then
             cat "$GH_FIXTURES/threads-page2.json"
         else
-            if [ -f "$GH_STATE/resolved" ]; then cat "$GH_FIXTURES/threads-page1-resolved.json"; else cat "$GH_FIXTURES/threads-page1.json"; fi
+            if [ -f "$GH_STATE/triggered" ]; then cat "$GH_FIXTURES/threads-page1-audited.json"
+            elif [ -f "$GH_STATE/resolved" ]; then cat "$GH_FIXTURES/threads-page1-resolved.json"
+            else cat "$GH_FIXTURES/threads-page1.json"; fi
         fi ;;
+    "pr comment 7 --repo acme/widgets --body /ai-review") touch "$GH_STATE/triggered"; echo "https://github.com/acme/widgets/pull/7#issuecomment-1" ;;
     api\ repos/*/pulls/*/comments/*/replies*) echo "999" ;;
     "pr checks 7 --json name,bucket"|"pr checks 7 --repo acme/widgets --json name,bucket")
         n=$(cat "$GH_STATE/tick" 2>/dev/null || echo 0); echo $((n+1)) > "$GH_STATE/tick"
@@ -83,6 +86,7 @@ cat > "$GH_FIXTURES/threads-page2.json" <<'J'
 ]}}}}}
 J
 sed 's/"id":"T1","isResolved":false/"id":"T1","isResolved":true/' "$GH_FIXTURES/threads-page1.json" > "$GH_FIXTURES/threads-page1-resolved.json"
+sed 's/"body":"\*\*P1\*\* Fence the claim on attemptId."}/"body":"**P1** Fence the claim on attemptId."},{"databaseId":104,"author":{"login":"example-reviewer[bot]"},"createdAt":"2026-09-07T10:05:00Z","body":"ai-review:author-resolve-audit ok"}/' "$GH_FIXTURES/threads-page1-resolved.json" > "$GH_FIXTURES/threads-page1-audited.json"
 
 # ---------------------------------------------------------------- pr-threads
 out=$(cd "$REPO" && "$BIN/pr-threads" 7 --context 2 2>&1); rc=$?
@@ -169,6 +173,16 @@ check "review-wait: no bot verdict yet → timeout with hint" 2 "$rc" "$out" 'TI
 printf '[{"user":{"login":"example-reviewer[bot]"},"state":"APPROVED","commit_id":"0000000","submitted_at":"2026-10-09T09:00:00Z","body":"<!-- ai-review:approval reviewed=0000000 -->"}]' > "$GH_FIXTURES/reviews.json"
 out=$("$BIN/review-wait" 7 --max 1 --interval 1 2>&1); rc=$?
 check "review-wait: stale-head review ignored" 2 "$rc" "$out" 'TIMEOUT'
+
+# ---------------------------------------------------------------- audit-wait
+rm -f "$GH_STATE/triggered" "$GH_STATE/resolved"; touch "$GH_STATE/resolved"
+out=$("$BIN/audit-wait" 7 101 --max 1 --interval 1 2>&1); rc=$?
+check "audit-wait: pending without trigger → exit 2 with hint" 2 "$rc" "$out" 'pending=101' '--trigger'
+if [ -f "$GH_STATE/triggered" ]; then bad "audit-wait must not comment without --trigger" "$out"; else ok; fi
+out=$("$BIN/audit-wait" 7 101 --trigger --timeout 5 --interval 0 2>&1); rc=$?
+check "audit-wait --trigger: posts /ai-review once, then audited" 0 "$rc" "$out" 'posted /ai-review' 'AUDIT DONE audited=101'
+n=$(grep -c 'pr comment 7' "$GH_LOG"); if [ "$n" = 1 ]; then ok; else bad "audit-wait --trigger comments exactly once (got $n)" "$(cat "$GH_LOG")"; fi
+rm -f "$GH_STATE/triggered" "$GH_STATE/resolved"
 
 # ---------------------------------------------------------------- repo resolution
 # PR 8 does not exist in acme/widgets, the repo the current directory resolves to:

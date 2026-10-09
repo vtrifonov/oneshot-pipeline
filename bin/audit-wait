@@ -1,5 +1,5 @@
 #!/bin/bash
-# audit-wait <pr> <first-comment-id>... [--max SECONDS] [--interval SECONDS] [--repo owner/name]
+# audit-wait <pr> <first-comment-id>... [--max SECONDS | --timeout SECONDS] [--interval SECONDS] [--repo owner/name] [--trigger]
 #
 # After the author replies to and resolves a bot review thread, a marker-compatible bot
 # runs an asynchronous ONE-TIME audit and posts a reply on that thread containing
@@ -12,18 +12,24 @@
 #   exit 0  nothing pending
 #   exit 2  --max reached with ids still pending (default 240s; call again)
 #
+# The audit runs only after a push or an `/ai-review` comment. A wave closed
+# without a push never triggers it: pass --trigger to post `/ai-review` once,
+# after the first poll, when any named thread is still pending.
+#
 # Ids are the thread's FIRST-COMMENT databaseId (the "comment <id>" number in
-# pr-threads output). Read-only. Paginates past GitHub's silent 100-thread cap.
+# pr-threads output). Read-only unless --trigger. Paginates past GitHub's silent 100-thread cap.
 
 set -o pipefail
 
-PR=""; MAX=240; INTERVAL=20; REPO=""; IDS=()
+PR=""; MAX=240; INTERVAL=20; REPO=""; IDS=(); TRIGGER=0; TRIGGERED=0
 while [ $# -gt 0 ]; do
     case "$1" in
-        --max) MAX="$2"; shift 2 ;;
+        --max|--timeout) MAX="$2"; shift 2 ;;
         --interval) INTERVAL="$2"; shift 2 ;;
         --repo) REPO="$2"; shift 2 ;;
-        -h|--help) sed -n '2,17p' "$0"; exit 0 ;;
+        --trigger) TRIGGER=1; shift ;;
+        -h|--help) sed -n '2,21p' "$0"; exit 0 ;;
+        -*) echo "audit-wait: unknown flag $1" >&2; exit 64 ;;
         *) if [ -z "$PR" ]; then PR="$1"; else IDS+=("$1"); fi; shift ;;
     esac
 done
@@ -67,6 +73,13 @@ while :; do
     line="audited=$(join "${audited[@]}") reopened=$(join "${reopened[@]}") pending=$(join "${pending[@]}")"
     if [ "$line" != "$prev" ]; then echo "[$(date +%H:%M:%S)] +$(( $(date +%s) - start ))s $line"; prev="$line"; fi
     if [ "${#pending[@]}" = 0 ]; then echo "AUDIT DONE $line"; exit 0; fi
-    if [ $(( $(date +%s) - start )) -ge "$MAX" ]; then echo "AUDIT DONE $line"; exit 2; fi
+    if [ "$TRIGGER" = 1 ] && [ "$TRIGGERED" = 0 ]; then
+        gh pr comment "$PR" --repo "$REPO" --body "/ai-review" >/dev/null && { echo "posted /ai-review on #$PR (no-push wave: the bot audits only on a push or this comment)"; TRIGGERED=1; }
+    fi
+    if [ $(( $(date +%s) - start )) -ge "$MAX" ]; then
+        echo "AUDIT DONE $line"
+        echo "hint: a close with no push never triggers the audit; rerun with --trigger to post /ai-review once"
+        exit 2
+    fi
     sleep "$INTERVAL"
 done
