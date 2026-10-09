@@ -65,5 +65,33 @@ class SubagentGuardTest(unittest.TestCase):
         self.assertEqual(run_hook(self.S, "ls | rm -f src/x", agent="a1").returncode, 2)
 
 
+class SdGuardTest(unittest.TestCase):
+    S = "sd-guard.sh"
+
+    def test_single_line_literal_main_allowed(self):
+        self.assertEqual(run_hook(self.S, "sd -F -- 'old' 'new' src/x.ts").returncode, 0)
+
+    def test_multiline_pattern_denied(self):
+        r = run_hook(self.S, r"sd 'a,\nb' '' src/x.ts")
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("Edit tool", r.stderr)
+
+    def test_template_literal_replacement_denied(self):
+        self.assertEqual(run_hook(self.S, "sd 'x' '${id}' src/x.ts").returncode, 2)
+        self.assertEqual(run_hook(self.S, r"sd '\z' 'tail' f").returncode, 2)
+        self.assertEqual(run_hook(self.S, r"sd '[\s\S]*?x' 'y' f").returncode, 2)
+
+    def test_regex_brace_without_fixed_denied(self):
+        self.assertEqual(run_hook(self.S, r"sd 'a\{' 'b' f").returncode, 2)
+        self.assertEqual(run_hook(self.S, r"sd -F 'a\{' 'b' f").returncode, 0)
+
+    def test_subagent_sd_always_denied(self):
+        r = run_hook(self.S, "sd -F -- 'old' 'new' f", agent="a1")
+        self.assertEqual(r.returncode, 2)
+
+    def test_non_sd_passes(self):
+        self.assertEqual(run_hook(self.S, "echo 'sd is \\n fine in text'").returncode, 0)
+
+
 if __name__ == "__main__":
     unittest.main()
