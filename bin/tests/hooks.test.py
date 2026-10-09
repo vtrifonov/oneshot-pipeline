@@ -129,6 +129,14 @@ class SdGuardTest(unittest.TestCase):
     def test_non_sd_passes(self):
         self.assertEqual(run_hook(self.S, "echo 'sd is \\n fine in text'").returncode, 0)
 
+    def test_only_the_sd_segment_is_checked(self):
+        self.assertEqual(run_hook(self.S, "sd -F 'a' 'b' f && echo \"${HOME}\"").returncode, 0)
+        self.assertEqual(run_hook(self.S, "rg 'x|sd \\(' f").returncode, 0)
+        self.assertEqual(run_hook(self.S, "printf '%s\\n' 'M5 sd-guard: rg x|sd \\(' >> log; echo \"${HOME}\"").returncode, 0)
+        self.assertEqual(run_hook(self.S, r"sd 'a\{' 'b' f -F").returncode, 0)
+        self.assertEqual(run_hook(self.S, r"grep -F x f | sd 'a\(' 'b' f").returncode, 2)
+        self.assertEqual(run_hook(self.S, "FOO=1 sd -F 'a' 'b' f", agent="a1").returncode, 2)
+
 
 if __name__ == "__main__":
     unittest.main()
