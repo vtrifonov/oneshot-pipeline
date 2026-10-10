@@ -26,6 +26,8 @@ After the brainstorm approval checkpoint, run fully autonomously. Do not check i
 
 **Invoking this playbook = pre-approval for pushing the branch and opening the ONE PR it produces.** No further approval asks for that PR. (Blanket approvals never extend to other PRs.) **One exception: the PR size budget.** The pre-approval covers a PR only inside the reviewer's normal tier: ≤ 4,000 changed lines, ≤ 75 files and ≤ 200 KB of diff, counted base-relative and including generated files and lockfiles. Past that the reviewer gets only per-file summaries and the review goes shallow by design. A PR projected or measured over budget needs the user's explicit yes. Send a PushNotification, then AskUserQuestion with the three numbers and a proposed split. Their yes covers that one PR. It is also the explicit opt-in the `Workflow` tool requires (Phase 10b).
 
+**Controller discipline.** The controller does not Read source files or whole specs/plans: it delegates the reading, or uses targeted `rg` and line ranges (Phase 6 §6c inline TDD is the one exception). Run state lives in `/tmp/<slug>/timeline.txt`, so a compaction loses nothing. Phase boundaries (PR opened, a wave done) are the natural points for the user to run `/compact`: when the controller's context is large, say so in the status message and suggest it.
+
 ## Lane triage — decide at the end of Phase 1, record in the PR body
 
 The lane is a **predicate over the diff**, not a feeling about the task. Evaluate every trigger row; one match = **full lane**, none = **lite lane**. Evaluate three times: **provisional** at the end of Phase 1 (design + expected files), **confirmed** at the end of Phase 2 (written spec), **mechanical** at Phase 8 (base-relative name/status, source-filtered numstat, and changed-content inspection in `reference/lane-triage.md`, the only evaluation that sees the real diff).
@@ -116,6 +118,13 @@ A finding has four parts, in this order: **severity**, **claim** (one sentence),
 
 Controller disposition: validate premises and deduplicate first; mark accepted/rejected/duplicate/unresolved with evidence. A plausible scenario is not proof. Fix every accepted BLOCKER and MAJOR (fix the class, not the instance). MINOR is **optional by default** — apply only when it is a one-line change in a file already being edited; otherwise list it under "Parked (MINOR)" in the PR body with one line of rationale. On a bot thread, MINOR means a rationale reply and a close with no edit (Phase 10). A finding that arrives without a failure scenario is MINOR regardless of the label the reviewer put on it. A clean review is valid; no finding quota. Check premises before adding guards or tests for impossible states.
 
+## Brief discipline — paste into EVERY subagent brief
+
+- **Read ranges, not files.** Files over ~400 lines: `sed -n 'a,bp'` or Read with `offset`/`limit`. Cap searches (`rg -m 50`, `--max-count`).
+- **Write findings to the deliverable file as you go**, not at the end.
+- **Past ~150 tool calls, an author or implementer writes a progress note and stops**; a fresh agent continues from it. Context above ~150k is where long agents burn money.
+- **The final report is your last message and/or the deliverable file.** Do not also SendMessage the controller at the end: it double-notifies.
+
 ## Model matrix
 
 Claude defaults below: pass `model` when that alias is available. Other runtimes use the adapter's available model mapping or inherit; never pass unavailable aliases. **No-fable mode (the user's choice — named at invocation or picked at the Phase 0 ask, see § Run options):** when it is on, every `fable` row below runs on `opus` instead — brainstorm, plan author/reviser and wave fixer (10a dispatch `model: opus`; 10b pass `fixModel: 'opus'` in the Workflow args). Nothing else changes: same agents, same sole-writer ownership, same phases. Like quick mode it is orthogonal to lane and mode, recommended but never self-selected, never dropped mid-run; record it by suffixing the metrics row's `mode` value with `+nofable` (`standard+nofable`, `quick+nofable`) — the 19-column schema stays fixed. Wherever a phase reference says `fable`, read "the plan/design/fixer model". **If `fable` is not available in the runtime, the brainstorm, plan and wave-fixer agents fall back to `opus`** — they stay subagents either way, because the phase structure (design brief file, one sole writer per artifact) is what makes revisions cheap, not the model alias. `fable` goes where judgment beats prose: design exploration, task decomposition, and disputing reviewer claims; it is never used on parallel panels, where tier cost multiplies.
@@ -128,9 +137,9 @@ Claude defaults below: pass `model` when that alias is available. Other runtimes
 | Controller work (orchestration, findings triage, lane calls, dispositions, gates) | inherit (session model) | Judgment on other agents' output stays on the session model |
 | Expert panel — spec & plan reviews | `opus` | Independent reasoning per selected scope; record cost per pass (parallelism reduces latency, not total cost) |
 | SDD implementer subagents | `sonnet` | Fast, strong coder for well-scoped plan tasks |
-| SDD implementer — task flagged complex/cross-cutting in the plan | `opus` | Escalate when the plan marks risk |
-| SDD task reviewer | `opus` | Reviewer must out-reason the implementer |
-| Code review (correctness/testing; plus security/architecture on the full lane) | `opus` | Run each review in an opus subagent |
+| SDD implementer — task flagged complex in the plan, with a one-line named risk (`reference/phases-0-5-setup-to-plan.md` §4) | `opus` | Escalate when the plan names a concrete risk; an unjustified flag stays `sonnet` |
+| SDD task reviewer | `sonnet`; `opus` only when the batch contains a task flagged complex (as above) | Bounded diff against a verbatim task text; the out-reason-the-author rule belongs to Phase 7 |
+| Phase 7 code review (correctness/testing; plus security/architecture on the full lane) | `opus` | Reviewer must out-reason the whole change's author; run each review in an opus subagent |
 | Phase 10 wave fixer (`pr-shepherd`, both 10a and 10b) | `fable` | Verifies bot claims against code, fixes the class, disputes findings; every burned wave costs 25–100 min, so out-reasoning the reviewer pays for the tier |
 | Phase 10 triage (classify a wave under the Finding contract) | `sonnet` | Read-only, bounded, schema-typed |
 | Mechanical helpers (transcript digging, `review-wait`, gh queries) | `haiku`, effort low | Cheap, no judgment needed |

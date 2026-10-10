@@ -5,7 +5,7 @@ The controller owns the loop. A fresh pr-shepherd handles one prepared wave and 
 #### 10a. Controller-driven (default)
 1. Wait for current-head CI/review evidence using native APIs. For a configured marker-compatible bot, run review-wait with AI_REVIEW_BOT and a bounded timeout. ci-wait alone proves check status, not a reviewer's approval.
 2. Run pr-threads <pr> --reviews from the worktree into the wave file. Include review-body findings and relevant failed-check evidence. Missing/empty reports are failures, not zero findings.
-3. Triage each item under the Finding contract against anchored code. Append dispositions and evidence to the ledger. Size skips/refusals block completion even with zero findings.
+3. Triage each item under the Finding contract against anchored code (targeted line ranges, or delegate; SKILL.md § Controller discipline). Append dispositions and evidence to the ledger. Size skips/refusals block completion even with zero findings.
 4. Dispatch fresh pr-shepherd with worktree, PR, standing decisions, Finding contract, wave file and FIX/REPLY-CLOSE lists. FIX means accepted BLOCKER/MAJOR: scoped verification and commits. MINOR gets a rationale reply and close where the review policy allows it.
 5. Verify its report, pushed head and confirmed thread states. If the adapter requires post-close audits, trigger the configured review when no push did so, then use audit-wait. Do not assume a close starts an audit.
 6. Reopened/parked threads need owner resolution; never repeat the same close disposition. Regenerate handover state from GitHub. Repeat only for new actionable findings.
