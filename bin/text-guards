@@ -1,0 +1,96 @@
+#!/bin/bash
+# text-guards — list the test suites that read a diff's changed files as TEXT.
+#
+# Import-graph sweeps (verify-diff, a repo's covering-tests script) never name a guard that reads
+# files by path or scans a whole directory, so a change such a guard rejects passes every scoped
+# local run and goes red only in CI (papercut class false-green). Typical guards: a path-literal
+# ban, a parity test that reads two files as text, a registry-completeness grep over a route tree
+# (which a word in a comment can trip), a tree-wide logging convention check.
+#
+# Two legs, per changed file:
+#   path   a test file contains the changed path as a literal string;
+#   scan   a test file quotes an ancestor directory of the changed file ('app/api', "lib", …)
+#          AND calls a file reader (readFileSync, readdirSync, execFileSync, globSync, …).
+#
+# usage: text-guards --base <ref> [--repo <dir>] [--cmd]
+#   --base  REQUIRED: diff against merge-base(<ref>, HEAD) plus the working tree (the PR base,
+#           e.g. origin/develop; origin/HEAD is not always the integration branch)
+#   --repo  repository root (default: current directory's repo)
+#   --cmd   also print one `npx vitest run …` line for the listed suites
+# exit: 0 listed (possibly none) · 64 usage / unknown base
+set -u
+
+base=""; repo=""; want_cmd=0
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --base) base="${2:-}"; shift 2 ;;
+        --repo) repo="${2:-}"; shift 2 ;;
+        --cmd) want_cmd=1; shift ;;
+        -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
+        *) echo "usage: text-guards --base <ref> [--repo <dir>] [--cmd]" >&2; exit 64 ;;
+    esac
+done
+[ -n "$base" ] || { echo "usage: --base needs a ref" >&2; exit 64; }
+if [ -z "$repo" ]; then repo=$(git rev-parse --show-toplevel 2>/dev/null) || { echo "not in a git repo" >&2; exit 64; }; fi
+cd "$repo" || exit 64
+
+if ! git rev-parse --verify --quiet "$base^{commit}" >/dev/null; then
+    echo "text-guards: base '$base' not found" >&2; exit 64
+fi
+mb=$(git merge-base "$base" HEAD) || { echo "text-guards: no merge-base with '$base'" >&2; exit 64; }
+
+changed=$( { git diff --name-only "$mb"; git ls-files --others --exclude-standard; } | sort -u)
+if [ -z "$changed" ]; then echo "text-guards: no changed files against $base"; exit 0; fi
+
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/text-guards-XXXXXX"); trap 'rm -rf "$tmp"' EXIT
+git ls-files -z -- '*.test.ts' '*.test.tsx' '*.test.mjs' '*.test.js' '*.test.cjs' > "$tmp/tests"
+READERS='readFileSync|readdirSync|readFile\(|readdir\(|execFileSync|execSync|spawnSync|globSync|fast-glob|fg\.sync|walkSync'
+: > "$tmp/hits"   # lines: <test>\t<reason>
+
+# Leg 1: literal changed path.
+while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    xargs -0 rg -l -F -- "$f" < "$tmp/tests" 2>/dev/null | while IFS= read -r t; do
+        [ "$t" != "$f" ] && printf '%s\tpath %s\n' "$t" "$f"
+    done >> "$tmp/hits"
+done <<< "$changed"
+
+# Leg 2: quoted ancestor directory + a file reader.
+xargs -0 rg -l -0 -e "$READERS" < "$tmp/tests" > "$tmp/readers" 2>/dev/null
+if [ -s "$tmp/readers" ]; then
+    while IFS= read -r f; do
+        d=$(dirname "$f")
+        while [ "$d" != "." ] && [ "$d" != "/" ]; do echo "$d"; d=$(dirname "$d"); done
+    done <<< "$changed" | sort -u > "$tmp/dirs"
+    while IFS= read -r d; do
+        [ -n "$d" ] || continue
+        pat="['\"\`]$(printf '%s' "$d" | sed 's/[][\.*^$+?(){}|]/\\&/g')/?['\"\`]"
+        xargs -0 rg -l -e "$pat" < "$tmp/readers" 2>/dev/null | while IFS= read -r t; do
+            printf '%s\tscans %s/\n' "$t" "$d"
+        done >> "$tmp/hits"
+    done < "$tmp/dirs"
+fi
+
+nchanged=$(printf '%s\n' "$changed" | wc -l | tr -d ' ')
+sort -u "$tmp/hits" | awk -F'\t' '
+    { if (!($1 in why)) { order[++n] = $1; why[$1] = $2 } else why[$1] = why[$1] "; " $2 }
+    END { for (i = 1; i <= n; i++) printf "%s\t%s\n", order[i], why[order[i]] }' > "$tmp/grouped"
+n=$(wc -l < "$tmp/grouped" | tr -d ' ')
+echo "text-guards: $n suite(s) read changed files as text (base $base, $nchanged changed files)"
+[ "$n" = 0 ] && exit 0
+# Direct = a literal path or a nested directory; broad = only a top-level root ('lib', 'app').
+# Broad still matters: tree-wide guards (path-literal-guard, B-T1) are found only that way.
+awk -F'\t' '
+    { direct = ($2 ~ /(^|; )path / || $2 ~ /scans [^\/;]+\/[^;]*[^\/;]\// ) }
+    direct  { d[++nd] = sprintf("  %s\n      %s", $1, $2) }
+    !direct { b[++nb] = sprintf("  %s\n      %s", $1, $2) }
+    END {
+        printf "direct (%d):\n", nd; for (i = 1; i <= nd; i++) print d[i]
+        printf "broad, top-level directory scan only (%d):\n", nb; for (i = 1; i <= nb; i++) print b[i]
+    }' "$tmp/grouped"
+if [ "$want_cmd" = 1 ]; then
+    printf '\nnpx vitest run'
+    while IFS=$'\t' read -r t _; do printf ' %q' "$t"; done < "$tmp/grouped"
+    printf '\n'
+fi
+exit 0
