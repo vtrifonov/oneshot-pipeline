@@ -72,19 +72,21 @@ skip_reason() { # <engine review body> -> skipReason value from the review JOB l
 start=$(date +%s); prev=""
 while :; do
     head=$(gh pr view "$PR" --repo "$REPO" --json headRefOid --jq .headRefOid 2>/dev/null)
+    # Checked every poll, not only when no checks are listed: a conflicting head can
+    # still show a status posted from outside Actions (e.g. CODEOWNERS), which hid it.
+    mstate=$(gh pr view "$PR" --repo "$REPO" --json mergeable --jq .mergeable 2>/dev/null)
+    if [ "$mstate" = "CONFLICTING" ]; then
+        base=$(gh pr view "$PR" --repo "$REPO" --json baseRefName --jq .baseRefName 2>/dev/null)
+        echo "CONFLICTING head=$head — GitHub starts no CI for a conflicting head (it does not run merge=union drivers), so no review will come."
+        echo "  Fix: merge the base branch in locally and push: git fetch origin && git merge origin/${base:-<base>} (no force-push), verify, push."
+        exit 3
+    fi
     raw=$(gh pr checks "$PR" --repo "$REPO" --json name,bucket 2>/dev/null)
     if [ -n "$raw" ] && [ "$raw" != "[]" ]; then
         failed=$(printf '%s' "$raw" | jq -r --arg ex "$EXCLUDE" '.[] | select(.name | test($ex) | not) | select(.bucket=="fail" or .bucket=="cancel") | .name')
         if [ -n "$failed" ]; then echo "FAILED head=$head:"; printf '%s\n' "$failed" | sed 's/^/  /'; exit 1; fi
         snap=$(printf '%s' "$raw" | jq -r --arg ex "$EXCLUDE" '[.[] | select(.name | test($ex) | not)] | group_by(.bucket) | map("\(.[0].bucket):\(length)") | join(" ")')
     else
-        # A conflicting branch may have no check suite.
-        mstate=$(gh pr view "$PR" --repo "$REPO" --json mergeable --jq .mergeable 2>/dev/null)
-        if [ "$mstate" = "CONFLICTING" ]; then
-            echo "CONFLICTING head=$head — no check suite is created for a conflicting branch, so there is nothing to wait for."
-            echo "  Fix: resolve the PR base branch, merge its current head, verify, then push."
-            exit 3
-        fi
         snap="no checks reported yet"
     fi
     all_head=$(gh api "repos/$REPO/pulls/$PR/reviews" --paginate 2>/dev/null | jq -c --arg head "$head" '.[] | select(.commit_id==$head)')

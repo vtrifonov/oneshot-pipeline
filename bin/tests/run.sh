@@ -47,7 +47,8 @@ case "$*" in
         n=$(cat "$GH_STATE/tick" 2>/dev/null || echo 0); echo $((n+1)) > "$GH_STATE/tick"
         f="$GH_FIXTURES/checks-$n.json"; [ -f "$f" ] || f="$GH_FIXTURES/checks-last.json"; cat "$f" ;;
     "pr view 7 --repo acme/widgets --json headRefOid --jq .headRefOid") echo "feedfacefeedfacefeedfacefeedfacefeedface" ;;
-    "pr view 7 --repo acme/widgets --json mergeable --jq .mergeable") echo "MERGEABLE" ;;
+    "pr view 7 --repo acme/widgets --json mergeable --jq .mergeable") cat "$GH_STATE/mergeable" 2>/dev/null || echo "MERGEABLE" ;;
+    "pr view 7 --repo acme/widgets --json baseRefName --jq .baseRefName") echo "develop" ;;
     "pr view 7 --repo acme/widgets --json reviewDecision --jq .reviewDecision") cat "$GH_STATE/reviewDecision" 2>/dev/null || echo "REVIEW_REQUIRED" ;;
     "api repos/acme/widgets/pulls/7/reviews --paginate") cat "$GH_FIXTURES/reviews.json" ;;
     "run view "*) echo "[]" ;;
@@ -173,6 +174,12 @@ check "review-wait: no bot verdict yet → timeout with hint" 2 "$rc" "$out" 'TI
 printf '[{"user":{"login":"example-reviewer[bot]"},"state":"APPROVED","commit_id":"0000000","submitted_at":"2026-10-09T09:00:00Z","body":"<!-- ai-review:approval reviewed=0000000 -->"}]' > "$GH_FIXTURES/reviews.json"
 out=$("$BIN/review-wait" 7 --max 1 --interval 1 2>&1); rc=$?
 check "review-wait: stale-head review ignored" 2 "$rc" "$out" 'TIMEOUT'
+# E: conflicting branch whose head still reports a status (CODEOWNERS from another repo) → exit 3 at once
+rm -f "$GH_STATE/tick" "$GH_FIXTURES"/checks-*.json; mkchecks "$GH_FIXTURES/checks-last.json" "pending CODEOWNERS / Required reviewers"
+echo CONFLICTING > "$GH_STATE/mergeable"
+out=$(env -u CI_EXCLUDE_CHECKS "$BIN/review-wait" 7 --max 5 --interval 0 2>&1); rc=$?
+check "review-wait: conflicting with a leftover status still exits 3" 3 "$rc" "$out" 'CONFLICTING' 'git merge origin/develop'
+rm -f "$GH_STATE/mergeable"; rm -f "$GH_STATE/tick" "$GH_FIXTURES"/checks-*.json; mkchecks "$GH_FIXTURES/checks-last.json" "pass build"
 
 # ---------------------------------------------------------------- audit-wait
 rm -f "$GH_STATE/triggered" "$GH_STATE/resolved"; touch "$GH_STATE/resolved"
