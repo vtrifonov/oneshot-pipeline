@@ -94,7 +94,8 @@ while :; do
     if [ -z "$bot" ]; then
         bot=$(printf '%s\n' "$all_head" | jq -r 'select(.body | test("ai-review:")) | .user.login' | tail -1)
     fi
-    reviews=""; [ -n "$bot" ] && reviews=$(printf '%s\n' "$all_head" | jq -c --arg bot "$bot" 'select(.user.login==$bot)')
+    # GitHub reports an app's login as "<name>[bot]"; accept AI_REVIEW_BOT with or without the suffix.
+    reviews=""; [ -n "$bot" ] && reviews=$(printf '%s\n' "$all_head" | jq -c --arg bot "${bot%\[bot\]}" 'select((.user.login | sub("\\[bot\\]$"; "")) == $bot)')
     verdict_review=$(printf '%s\n' "$reviews" | jq -c --arg head "$head" 'select(.state=="APPROVED" or .state=="CHANGES_REQUESTED" or (.body | test("ai-review:(approval|engine=[^ ]+) reviewed=" + $head)))' | tail -1)
     state_line="head=${head:0:8} checks: $snap bot=${bot:-?} bot_reviews_on_head=$(printf '%s\n' "$reviews" | grep -c .)"
     if [ "$state_line" != "$prev" ]; then echo "[$(date +%H:%M:%S)] +$(( $(date +%s) - start ))s $state_line"; prev="$state_line"; fi
