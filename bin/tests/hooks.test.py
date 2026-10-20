@@ -23,6 +23,17 @@ class SubagentGuardTest(unittest.TestCase):
         self.assertEqual(run_hook(self.S, "rm -rf build").returncode, 0)
         self.assertEqual(run_hook(self.S, "cat <<EOF\nx\nEOF").returncode, 0)
 
+    def test_background_and_monitor_denied(self):
+        def run(payload):
+            return subprocess.run(["bash", str(BIN / self.S)], input=json.dumps(payload), text=True, capture_output=True)
+        bg = {"tool_name": "Bash", "agent_id": "a1", "tool_input": {"command": "npx vitest run", "run_in_background": True}}
+        self.assertEqual(run(bg).returncode, 2)
+        mon = {"tool_name": "Monitor", "agent_id": "a1", "tool_input": {"command": "tail -f x.log", "description": "d"}}
+        self.assertEqual(run(mon).returncode, 2)
+        ws = {"tool_name": "Monitor", "agent_id": "a1", "tool_input": {"ws": {"url": "wss://x"}, "description": "d"}}
+        self.assertEqual(run(ws).returncode, 2)
+        self.assertEqual(run({**ws, "agent_id": None}).returncode, 0)
+
     def test_rm_outside_scratch_denied(self):
         r = run_hook(self.S, "rm -f src/x.ts", agent="a1")
         self.assertEqual(r.returncode, 2)

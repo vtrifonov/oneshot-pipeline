@@ -63,4 +63,10 @@ Register them by merging into the existing PreToolUse list in ~/.claude/settings
 }
 ```
 
+Register `subagent-guard.sh` for the Monitor tool as well, in its own entry: the Bash matcher never sees a Monitor call, and a subagent that arms a Monitor stalls waiting on it.
+
+```json
+{"matcher": "Monitor", "hooks": [{"type": "command", "command": "bash \"$HOME/.claude/hooks/subagent-guard.sh\""}]}
+```
+
 Also narrow any `Bash(rm *)` entry in `permissions.ask` to recursive forms (`Bash(rm -r *)`, `Bash(rm -rf *)`): an ask rule prompts even when a hook allows, and a subagent cannot answer. The hooks require jq, perl and git. Installing the files alone does not register them.

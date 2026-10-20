@@ -13,14 +13,24 @@
 # Fails open: no command, no agent_id, or unparsable input → exit 0.
 
 INPUT=$(cat)
-CMD=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null)
-[ -z "$CMD" ] && exit 0
 AGENT_ID=$(printf '%s' "$INPUT" | jq -r '.agent_id // empty' 2>/dev/null)
 [ -z "$AGENT_ID" ] && exit 0
 
 set -f  # never glob-expand operands in the hook's own cwd
 
 deny() { printf '%s\n' "$1" >&2; exit 2; }
+
+# A background command never wakes a subagent when it finishes: the agent idles
+# "waiting for the notification" until the controller nudges it.
+# Checked before the command: a Monitor can carry a ws source and no command.
+# Register this hook for the Monitor tool too, or Monitor calls never reach it.
+BACKGROUND=$(printf '%s' "$INPUT" | jq -r '.tool_input.run_in_background // false' 2>/dev/null)
+TOOL=$(printf '%s' "$INPUT" | jq -r '.tool_name // empty' 2>/dev/null)
+if [ "$BACKGROUND" = "true" ] || [ "$TOOL" = "Monitor" ]; then
+    deny "Run commands in the FOREGROUND in subagents (set the Bash timeout up to 600000): a background run never wakes you when it ends, so you stall until the controller notices. If it needs longer than 10 minutes, narrow it or report to the controller."
+fi
+CMD=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null)
+[ -z "$CMD" ] && exit 0
 
 case "$CMD" in
     *$'\n'*|*'<<'*)
