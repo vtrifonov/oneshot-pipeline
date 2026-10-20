@@ -43,6 +43,19 @@ if [ "$rc" = 64 ] && printf '%s' "$out" | grep -q 'exists on origin'; then ok; e
 out=$("$BIN/wt-create" pr/remote-only --repo "$TMP/work/svc" 2>&1); rc=$?
 WT2="$TMP/work/svc-worktrees/pr-remote-only"
 if [ "$rc" = 0 ] && [ "$(git -C "$WT2" rev-parse HEAD 2>/dev/null)" = "$REMOTE_SHA" ] && [ "$(git -C "$WT2" rev-parse --abbrev-ref '@{upstream}' 2>/dev/null)" = "origin/pr/remote-only" ]; then ok; else bad "remote-only branch tracks origin" "rc=$rc $out"; fi
+# Default base is the integration branch: origin/develop when it exists, not origin/HEAD (master).
+git -C "$TMP/work/svc" remote set-head origin master >/dev/null 2>&1 || git -C "$TMP/work/svc" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/master
+git -C "$TMP/work/svc" fetch -q origin
+git -C "$TMP/work/svc" switch -q -c develop
+echo dev > "$TMP/work/svc/dev.txt"; git -C "$TMP/work/svc" add dev.txt; git -C "$TMP/work/svc" -c user.email=t@e.invalid -c user.name=T -c commit.gpgsign=false commit -qm dev
+git -C "$TMP/work/svc" push -q origin develop; git -C "$TMP/work/svc" switch -q master
+DEV_SHA=$(git -C "$TMP/work/svc" rev-parse origin/develop)
+out=$("$BIN/wt-create" feat/on-develop --repo "$TMP/work/svc" 2>&1); rc=$?
+if [ "$rc" = 0 ] && [ "$(git -C "$TMP/work/svc-worktrees/feat-on-develop" rev-parse HEAD 2>/dev/null)" = "$DEV_SHA" ]; then ok; else bad "defaults to origin/develop over origin/HEAD" "rc=$rc $out"; fi
+git -C "$TMP/work/svc" config wt.base master
+out=$("$BIN/wt-create" feat/on-config --repo "$TMP/work/svc" 2>&1); rc=$?
+if [ "$rc" = 0 ] && [ "$(git -C "$TMP/work/svc-worktrees/feat-on-config" rev-parse HEAD 2>/dev/null)" = "$(git -C "$TMP/work/svc" rev-parse master)" ]; then ok; else bad "git config wt.base overrides the default" "rc=$rc $out"; fi
+git -C "$TMP/work/svc" config --unset wt.base
 cp -R "$TMP/work/svc" "/tmp/wtc-svc-$$"
 out=$("$BIN/wt-create" feat/y --repo "/tmp/wtc-svc-$$" 2>&1); rc=$?
 rm -rf "/tmp/wtc-svc-$$"

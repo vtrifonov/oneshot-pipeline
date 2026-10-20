@@ -8,9 +8,10 @@ set -o pipefail
 cd "$(git rev-parse --show-toplevel 2>/dev/null)" || { echo "derived-check: not a git checkout" >&2; exit 64; }
 BASE=""
 while [ $# -gt 0 ]; do case "$1" in --base) BASE="$2"; shift 2 ;; *) echo "usage: derived-check [--base <ref>]" >&2; exit 64 ;; esac; done
-if [ -z "$BASE" ]; then
-    BASE=$(git symbolic-ref -q --short refs/remotes/origin/HEAD 2>/dev/null || echo origin/main)
-fi
+# shellcheck source=lib/default-base.sh
+. "$(dirname "$(readlink -f "$0")")/lib/default-base.sh"
+[ -z "$BASE" ] && BASE=$(default_base .)
+[ -z "$BASE" ] && BASE=origin/main
 git rev-parse --verify -q "$BASE^{commit}" >/dev/null || { echo "derived-check: base $BASE not found (fetch, or pass --base <ref>)" >&2; exit 64; }
 FOUND=0
 changed=$(git diff --name-only "$BASE...HEAD") || exit 64

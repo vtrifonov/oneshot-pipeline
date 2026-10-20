@@ -8,6 +8,7 @@
 #              node_modules next to the worktrees so `make` resolves
 #   env files  copy gitignored root .env* and supabase/functions/.env (no overwrite)
 #   repo hook  run <main>/.claude/worktree-setup.sh <worktree> <main> when present
+#   base       --base, else git config wt.base, else origin/develop, else origin/HEAD
 # Last stdout line: WORKTREE <path>. Exit 64 on refusal, 1 on git failure.
 
 set -o pipefail
@@ -37,10 +38,9 @@ WT="$PARENT/$DIR"
 [ -e "$WT" ] && { echo "wt-create: $WT already exists" >&2; exit 64; }
 mkdir -p "$PARENT"
 
-if [ -z "$BASE" ]; then
-    BASE=$(git -C "$MAIN" symbolic-ref -q --short refs/remotes/origin/HEAD 2>/dev/null || true)
-    [ -z "$BASE" ] && BASE=$(git -C "$MAIN" rev-parse --abbrev-ref HEAD)
-fi
+# shellcheck source=lib/default-base.sh
+. "$(dirname "$(readlink -f "$0")")/lib/default-base.sh"
+[ -z "$BASE" ] && BASE=$(default_base "$MAIN")
 if git -C "$MAIN" show-ref --verify -q "refs/heads/$BRANCH"; then
     echo "checking out existing local branch $BRANCH"
     git -C "$MAIN" worktree add "$WT" "$BRANCH" || exit 1
@@ -53,7 +53,8 @@ elif git -C "$MAIN" show-ref --verify -q "refs/remotes/origin/$BRANCH"; then
     git -C "$MAIN" worktree add --track -b "$BRANCH" "$WT" "origin/$BRANCH" || exit 1
 else
     echo "creating $BRANCH from $BASE"
-    git -C "$MAIN" worktree add -b "$BRANCH" "$WT" "$BASE" || exit 1
+    # --no-track: a new branch must not take its base (e.g. origin/master) as upstream.
+    git -C "$MAIN" worktree add --no-track -b "$BRANCH" "$WT" "$BASE" || exit 1
 fi
 
 # Makefiles that include ../solution resolve relative to the checkout dir.
