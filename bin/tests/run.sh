@@ -241,6 +241,14 @@ check "verify-diff: --no-tests --no-lint leaves tsc only" 0 "$rc" "$out" 'tsc:'
 if printf '%s' "$out" | grep -qE 'eslint|vitest'; then bad "verify-diff --no-tests --no-lint" "$out"; else ok; fi
 out=$(cd "$REPO" && "$BIN/verify-diff" --dry-run --files lib/util.ts 2>&1); rc=$?
 check "verify-diff: no lint config → skipped" 0 "$rc" "$out" 'lint: skipped' 'push gate is the repo'
+# Repo-declared extra gates: .claude/verify-diff-extra lines are "<path-prefix> <command>".
+mkdir -p "$REPO/.claude"; printf '# comment\npackages/core/ echo core-gate\nlib/ false\n' > "$REPO/.claude/verify-diff-extra"
+out=$(cd "$REPO" && "$BIN/verify-diff" --dry-run --no-tests --no-lint --no-tsc --files packages/core/src/index.ts 2>&1); rc=$?
+check "verify-diff: extra gate runs for a matching prefix" 0 "$rc" "$out" 'extra\(packages/core/\): echo core-gate'
+if printf '%s' "$out" | grep -q 'extra(lib/)'; then bad "verify-diff: extra gate skipped for a non-matching prefix" "$out"; else ok; fi
+out=$(cd "$REPO" && "$BIN/verify-diff" --no-tests --no-lint --no-tsc --files lib/util.ts 2>&1); rc=$?
+check "verify-diff: a failing extra gate fails the run" 1 "$rc" "$out" 'extra lib/: FAILED'
+rm -r "$REPO/.claude"
 echo '{}' > "$REPO/.oxlintrc.json"
 out=$(cd "$REPO" && "$BIN/verify-diff" --dry-run --files lib/util.ts 2>&1); rc=$?
 check "verify-diff: oxlint when .oxlintrc.json exists" 0 "$rc" "$out" 'oxlint: npx oxlint --deny-warnings --type-aware lib/util\.ts'

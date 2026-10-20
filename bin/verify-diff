@@ -10,6 +10,8 @@
 #           and the errors that sit in CHANGED files separately — a stale
 #           workspace dist or a package with a non-zero baseline must not read
 #           as your regression.
+#   extra   repo-declared gates from .claude/verify-diff-extra ("<path-prefix> <command>"
+#           per line), run when a changed file sits under the prefix
 #   lint    changed .ts/.tsx/.js/.mjs files only, with the repo's own linter:
 #           oxlint when .oxlintrc.json exists, else eslint when an eslint
 #           config exists, else skipped (says so; the repo's lint target owns it)
@@ -104,6 +106,22 @@ if [ "$TSC" = 1 ] && [ ${#CFGS[@]} -gt 0 ]; then
         elif [ "$total" -gt 0 ]; then echo "tsc $cfg: $total pre-existing error(s), none in changed files (ok)"
         else echo "tsc $cfg: clean"; fi
     done
+fi
+
+# Repo-declared gates CI runs that no tsconfig scope covers (e.g. a baseline type-check of a
+# package the root config excludes). One "<path-prefix> <command>" per line; # starts a comment.
+# A command runs once, from the repo root, when any changed path starts with its prefix.
+EXTRA=.claude/verify-diff-extra
+if [ -f "$EXTRA" ]; then
+    while read -r prefix cmd; do
+        case "$prefix" in ''|'#'*) continue ;; esac
+        hit=0; for f in "${SRC[@]}" "${TESTFILES[@]}"; do case "$f" in "$prefix"*) hit=1; break ;; esac; done
+        [ "$hit" = 1 ] || continue
+        if [ "$DRY" = 1 ]; then echo "[dry-run] extra($prefix): $cmd"; continue; fi
+        out=$(timeout 300 bash -c "$cmd" 2>&1); rc=$?
+        if [ "$rc" = 0 ]; then echo "extra $prefix: clean ($cmd)"
+        else echo "extra $prefix: FAILED (exit $rc) — $cmd"; printf '%s\n' "$out" | tail -n 30 | sed 's/^/  /'; FAIL=1; fi
+    done < "$EXTRA"
 fi
 
 if [ "$LINT" = 1 ] && [ ${#LINTABLE[@]} -gt 0 ]; then
