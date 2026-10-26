@@ -7,10 +7,15 @@ Two subcommands:
   mark <slug> start <step>     an inline controller step starts (e.g. p6-task-3, p8-gates)
   mark <slug> end <step>       that step ends
   mark <slug> done             the run is over; report counts nothing after this
+  mark <slug> task <label> --agent "<dispatch description>"
+                               a subagent starts plan task <label> (e.g. T7); run BY the
+                               agent as the first command of each task it implements
+  any mark takes --at <ISO>    to backfill a boundary (e.g. from a commit time)
 
   report <slug> [--run-id ID] [--mode M] [--lane L] [--csv PATH] [--no-csv]
+                [--artifacts DIR]
 
-Marks go to /tmp/<slug>/marks.tsv (ISO time, kind, label). report reads the
+Marks go to /tmp/<slug>/marks.tsv (ISO time, kind, label[, agent]). report reads the
 Claude Code transcripts, so nothing has to be logged by hand per agent:
 
 - Controller sessions: every top-level <projects>/*/<session>.jsonl, modified
@@ -24,10 +29,20 @@ Only messages between the first mark and the done mark (or now) count. Usage
 is deduplicated per API message id. Tokens are split into input (uncached),
 cache_write, cache_read and output, per model.
 
+- Tasks: an agent that implements several plan tasks is split at its task
+  marks into one `task` row per task (its messages before the first mark go
+  to the first task). The agent row still carries the whole agent.
+
 Writes /tmp/<slug>/step-metrics.json and, unless --no-csv, replaces this
-run's rows in <skill-dir>/step-metrics.csv (one row per agent, inline step,
-controller-per-phase, phase and total). Prints a compact table.
+run's rows in <skill-dir>/step-metrics.csv (one row per agent, task, inline
+step, controller-per-phase, phase and total). Prints a compact table.
+
+Also writes /tmp/<slug>/review-runs.skeleton.jsonl: one review-policy record
+per agent whose description names a review or recheck, with time and tokens
+filled and the finding fields null for the controller to fill from the
+ledger. With --artifacts DIR, a missing DIR/review-runs.jsonl is a note.
 """
+import re
 import argparse
 import collections
 import csv
@@ -46,6 +61,7 @@ CSV_FIELDS = [
 TOKEN_KEYS = ["input", "cache_write", "cache_read", "output"]
 HUMAN_GAP_S = 30
 IDLE_GAP_S = 120
+REVIEW_STEP = re.compile(r"review|recheck", re.IGNORECASE)
 
 
 def now_iso():
@@ -70,10 +86,16 @@ def cmd_mark(args):
         sys.exit(f"mark {args.kind} needs a step label")
     if args.kind == "phase" and not args.label:
         sys.exit("mark phase needs a phase number")
+    if args.kind == "task" and not (args.label and args.agent):
+        sys.exit('mark task needs a task label and --agent "<dispatch description>"')
+    when = now_iso()
+    if args.at:
+        when = parse_ts(args.at).astimezone(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    agent = (args.agent or "").replace("\t", " ")
     path = run_dir(args.slug) / "marks.tsv"
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a") as fh:
-        fh.write(f"{now_iso()}\t{args.kind}\t{args.label or ''}\n")
+        fh.write(f"{when}\t{args.kind}\t{args.label or ''}" + (f"\t{agent}" if agent else "") + "\n")
     return 0
 
 
@@ -85,8 +107,40 @@ def read_marks(slug):
     for line in path.read_text().splitlines():
         parts = line.split("\t")
         if len(parts) >= 2:
-            marks.append((parse_ts(parts[0]), parts[1], parts[2] if len(parts) > 2 else ""))
+            marks.append((parse_ts(parts[0]), parts[1], parts[2] if len(parts) > 2 else "",
+                          parts[3] if len(parts) > 3 else ""))
     return sorted(marks, key=lambda m: m[0])
+
+
+def task_rows(base, phase, step, agent_marks, messages):
+    """Split one agent's messages at its task marks; earlier messages go to the first task."""
+    out = []
+    for i, (mark_ts, label) in enumerate(agent_marks):
+        nxt = agent_marks[i + 1][0] if i + 1 < len(agent_marks) else None
+        inside = [m for m in messages
+                  if (i == 0 or m["ts"] >= mark_ts) and (nxt is None or m["ts"] < nxt)]
+        if not inside:
+            continue
+        tokens, models = summarize(inside)
+        first, last = inside[0]["ts"], inside[-1]["ts"]
+        out.append(row(base, phase=phase, kind="task", step=f"{label} ({step})", agent_type="",
+                       model=fmt_model(models), depth="", started_at=iso(first), ended_at=iso(last),
+                       wall_s="", active_s=round((last - first).total_seconds()), human_wait_s="",
+                       idle_s="", messages=len(inside), tokens=tokens))
+    return out
+
+
+def review_skeleton(run_id, phase, step, agent_id, first, last, tokens):
+    return {
+        "schema_version": 1, "policy_version": "2026-09-risk-panels", "run_id": run_id,
+        "phase": phase, "reviewer_id": step, "agent_id": agent_id, "lens": None,
+        "artifact_revision": None, "pass_kind": "recheck" if "recheck" in step.lower() else "initial",
+        "started_at": iso(first), "finished_at": iso(last),
+        "elapsed_seconds": round((last - first).total_seconds()),
+        "tokens": sum(tokens[k] for k in TOKEN_KEYS), "output_tokens": tokens["output"],
+        "cost": None, "currency": None, "reported_bmm": None, "unique_accepted_bmm": None,
+        "duplicate_count": None, "rejected_count": None, "unresolved_count": None, "finding_ids": None,
+    }
 
 
 def empty_tokens():
@@ -234,10 +288,14 @@ def cmd_report(args):
     start = marks[0][0]
     done = [m[0] for m in marks if m[1] == "done"]
     end = done[-1] if done else dt.datetime.now(dt.timezone.utc)
-    phase_marks = [(ts, label) for ts, kind, label in marks if kind == "phase"]
+    phase_marks = [(ts, label) for ts, kind, label, _ in marks if kind == "phase"]
+    task_marks = collections.defaultdict(list)
+    for ts, kind, label, agent in marks:
+        if kind == "task":
+            task_marks[agent].append((ts, label))
     step_windows = []
     open_steps = {}
-    for ts, kind, label in marks:
+    for ts, kind, label, _ in marks:
         if kind == "start":
             open_steps[label] = ts
         elif kind == "end" and label in open_steps:
@@ -260,6 +318,7 @@ def cmd_report(args):
     controller_msgs = []
     controller_events = []
     agents = []
+    reviews = []
     for session in sessions:
         messages, events = read_transcript(session, start, end, skip_sidechain=True)
         controller_msgs.extend(messages)
@@ -323,6 +382,12 @@ def cmd_report(args):
                         started_at=iso(first), ended_at=iso(last), wall_s="",
                         active_s=round((last - first).total_seconds()), human_wait_s="", idle_s="",
                         messages=len(messages), tokens=tokens))
+        if task_marks.get(step):
+            rows.extend(task_rows(base, phase, step, task_marks.pop(step), messages))
+        if REVIEW_STEP.search(step):
+            reviews.append(review_skeleton(base["run_id"], phase, step, agent_id, first, last, tokens))
+    for agent in task_marks:
+        notes.append(f"task marks for agent {agent!r} match no dispatch description")
 
     bounds = phase_marks + [(end, None)]
     seen_phases = []
@@ -350,7 +415,14 @@ def cmd_report(args):
                     active_s="", human_wait_s=round(sum(human.values())), idle_s=round(sum(idle.values())),
                     messages=sum(phase_msgs.values()), tokens=grand))
 
-    order = {"phase": 0, "controller": 1, "inline": 2, "agent": 3, "total": 9}
+    reviews.sort(key=lambda r: r["started_at"])
+    (run_dir(args.slug) / "review-runs.skeleton.jsonl").write_text(
+        "".join(json.dumps(r) + "\n" for r in reviews))
+    if args.artifacts and not (pathlib.Path(args.artifacts) / "review-runs.jsonl").exists():
+        notes.append(f"{args.artifacts}/review-runs.jsonl missing: fill /tmp/{args.slug}/"
+                     f"review-runs.skeleton.jsonl ({len(reviews)} passes) from the ledger and save it there")
+
+    order = {"phase": 0, "controller": 1, "inline": 2, "agent": 3, "task": 4, "total": 9}
     phase_key = {p: i for i, p in enumerate(seen_phases)}
     rows.sort(key=lambda r: (r["kind"] == "total", phase_key.get(r["phase"], 99), order[r["kind"]], r["started_at"]))
 
@@ -403,8 +475,10 @@ def main():
     sub = parser.add_subparsers(dest="cmd", required=True)
     mark = sub.add_parser("mark")
     mark.add_argument("slug")
-    mark.add_argument("kind", choices=["phase", "start", "end", "done"])
+    mark.add_argument("kind", choices=["phase", "start", "end", "done", "task"])
     mark.add_argument("label", nargs="?")
+    mark.add_argument("--agent")
+    mark.add_argument("--at")
     report = sub.add_parser("report")
     report.add_argument("slug")
     report.add_argument("--run-id")
@@ -412,6 +486,7 @@ def main():
     report.add_argument("--lane")
     report.add_argument("--csv")
     report.add_argument("--no-csv", action="store_true")
+    report.add_argument("--artifacts")
     args = parser.parse_args()
     return cmd_mark(args) if args.cmd == "mark" else cmd_report(args)
 
