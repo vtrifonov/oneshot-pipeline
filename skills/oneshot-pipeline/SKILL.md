@@ -125,6 +125,15 @@ Controller disposition: validate premises and deduplicate first; mark accepted/r
 - **Past ~150 tool calls, an author or implementer writes a progress note and stops**; a fresh agent continues from it. Context above ~150k is where long agents burn money.
 - **The final report is your last message and/or the deliverable file.** Do not also SendMessage the controller at the end: it double-notifies.
 
+## Sole writer — one live agent per deliverable file
+
+Every author, reviser, implementer and fixer brief names each file it owns on its own line: `Sole writer: <absolute path>`. The `writer-guard` hook (`reference/distribution.md` § Hooks) reads those lines and denies a dispatch that claims a file a live agent of the session already claims, and a `SendMessage` that would resume a finished owner.
+
+- **A scope change while the owner runs: hold it.** Append it to `/tmp/<slug>/timeline.txt` as `pending-change: <file> <one line>` and dispatch it as a fresh revision after the owner reports. Do not message the owner and then dispatch a reviser: a message can land minutes later, and the owner then writes beside the reviser (a stopped duplicate cost 2.4M tokens on 2026-10-26).
+- **Message the running owner only when its answer is needed now** (a design-agent question round, Phase 1). Then wait for its report; never dispatch a second agent on that file in the meantime.
+- **After the owner reports, never message it new work.** Dispatch a fresh agent with the full brief.
+- Overrides are for the stated cases only: `writer-guard: takeover` in a brief when the owner was TaskStopped or is stuck on an unanswerable prompt; `writer-guard: resume` in a message when the owner died on an API/auth error with uncommitted state.
+
 ## Step metrics — time and tokens for every phase, agent and inline step
 
 Measured, never estimated: `scripts/run-metrics.py` reads the Claude Code transcripts (controller session + `subagents/agent-*.jsonl`) and attributes every API message's usage and timestamps. The controller only stamps boundaries; `<skill-dir>` is this file's directory, `<slug>` the run's `/tmp/<slug>`.

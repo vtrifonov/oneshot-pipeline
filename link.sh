@@ -71,7 +71,7 @@ link_dir_of skills   "$skills_target"   '*'
 link_dir_of agents   "$agents_target"   '*.md'
 link_dir_of bin      "$bin_target"      '*'
 mkdir -p "$hooks_target"
-for hook in block-full-suite.sh subagent-guard.sh sd-guard.sh; do
+for hook in block-full-suite.sh subagent-guard.sh sd-guard.sh writer-guard; do
   link_one "${repo_root}/bin/${hook}" "${hooks_target}/${hook}"
 done
 

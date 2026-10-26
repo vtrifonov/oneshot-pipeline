@@ -44,7 +44,7 @@ For Claude/GitHub runs, confirm pr-shepherd is discovered and the required helpe
 
 ## Hooks
 
-`link.sh` places three PreToolUse Bash hooks in ~/.claude/hooks but does not change settings.json:
+`link.sh` places four PreToolUse hooks in ~/.claude/hooks but does not change settings.json:
 
 - `subagent-guard.sh` — subagents only: denies deletes outside scratch paths, heredocs/multi-line, inline `python -c`, git reverts, raw `git worktree add`. Each denial names the alternative. This is what stops an unattended run from hanging on a permission prompt.
 - `sd-guard.sh` — all sessions: denies the `sd` forms that silently no-op (multi-line, `${…}`, `\z`); subagents get no sd.
@@ -67,6 +67,12 @@ Register `subagent-guard.sh` for the Monitor tool as well, in its own entry: the
 
 ```json
 {"matcher": "Monitor", "hooks": [{"type": "command", "command": "bash \"$HOME/.claude/hooks/subagent-guard.sh\""}]}
+```
+
+`writer-guard` (python3) enforces SKILL.md § Sole writer. It denies an `Agent` dispatch whose brief claims a file (`Sole writer: <path>`) that a live subagent of the session already claims, and a `SendMessage` that would resume a finished owner. Briefs without a claim pass untouched. Overrides: `writer-guard: takeover` in a brief (the owner was TaskStopped or is stuck), `writer-guard: resume` in a message (the owner died on an API/auth error).
+
+```json
+{"matcher": "Agent|SendMessage", "hooks": [{"type": "command", "command": "\"$HOME/.claude/hooks/writer-guard\""}]}
 ```
 
 Also narrow any `Bash(rm *)` entry in `permissions.ask` to recursive forms (`Bash(rm -r *)`, `Bash(rm -rf *)`): an ask rule prompts even when a hook allows, and a subagent cannot answer. The hooks require jq, perl and git. Installing the files alone does not register them.

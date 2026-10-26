@@ -205,10 +205,11 @@ standard GitHub review and check APIs.
 <details>
 <summary><strong>Hooks</strong></summary>
 
-`link.sh` places three PreToolUse hooks in `~/.claude/hooks`. `subagent-guard.sh` (subagents only)
+`link.sh` places four PreToolUse hooks in `~/.claude/hooks`. `subagent-guard.sh` (subagents only)
 and `sd-guard.sh` deny the command classes that have hung unattended runs on a permission prompt or
 silently no-op'd. `block-full-suite.sh` only acts in repositories that have a `.scoped-verification`
-file at the Git root. Installing the files doesn't turn them on: registration, the `rm` ask-rule
+file at the Git root. `writer-guard` keeps one live agent per file a brief claims with
+`Sole writer: <path>`, and stops a message that would resume a finished owner. Installing the files doesn't turn them on: registration, the `rm` ask-rule
 narrowing and the controller-only `ALLOW_FULL_SUITE=1` override are covered in
 [`reference/distribution.md`](skills/oneshot-pipeline/reference/distribution.md).
 

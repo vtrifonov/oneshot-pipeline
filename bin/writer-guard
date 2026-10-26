@@ -1,0 +1,132 @@
+#!/usr/bin/env python3
+"""PreToolUse hook (Agent|SendMessage): one writer per deliverable file.
+
+A brief claims a file with a line `Sole writer: <absolute path>` (one line per file).
+Three dispatches in one month put a second writer on a file whose owner was still
+running, or resumed a finished owner with SendMessage after a fresh agent took over.
+
+  Agent        denied when a live subagent of this session claims the same path.
+               `writer-guard: takeover` in the prompt overrides it (the owner was
+               TaskStopped or is stuck on a prompt nobody will answer).
+  SendMessage  denied when the recipient claims a path and has finished its turn:
+               a message resumes it as a writer. `writer-guard: resume` in the
+               message overrides it (the agent died on an API/auth error).
+
+Live = its last assistant turn did not end, or a message arrived after it ended,
+and the transcript moved in the last STALE_S seconds. Exit 2 denies; stderr says why.
+"""
+import glob
+import json
+import os
+import re
+import sys
+import time
+
+STALE_S = 1800
+CLAIM = re.compile(r"^\s*[-*]?\s*Sole writer:\s*`?([^`\s]+)`?\s*$", re.M | re.I)
+
+
+def text_of(content):
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "\n".join(b.get("text", "") for b in content if isinstance(b, dict))
+    return ""
+
+
+def claims(text):
+    return {os.path.normpath(p) for p in CLAIM.findall(text or "")}
+
+
+def read_agent(path):
+    """Return (claimed paths, finished) for one subagent transcript."""
+    first, finished = None, False
+    with open(path, errors="replace") as f:
+        for line in f:
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            msg = row.get("message") or {}
+            role = msg.get("role")
+            if role == "user":
+                content = msg.get("content")
+                if first is None:
+                    first = text_of(content)
+                # A tool_result is part of the running turn; any other user row is a new message.
+                if not (isinstance(content, list) and any(isinstance(b, dict) and b.get("type") == "tool_result" for b in content)):
+                    finished = False
+            elif role == "assistant" and row.get("timestamp"):
+                finished = msg.get("stop_reason") == "end_turn"
+    return claims(first), finished
+
+
+def agents(session_dir):
+    out = []
+    for path in glob.glob(os.path.join(session_dir, "subagents", "agent-*.jsonl")):
+        meta_path = path[: -len(".jsonl")] + ".meta.json"
+        try:
+            with open(meta_path) as f:
+                meta = json.load(f)
+        except (OSError, ValueError):
+            meta = {}
+        agent_id = os.path.basename(path)[len("agent-"):-len(".jsonl")]
+        paths, finished = read_agent(path)
+        out.append({
+            "id": agent_id,
+            "name": meta.get("name") or meta.get("description") or agent_id,
+            "names": {agent_id, meta.get("name"), meta.get("agentType")} - {None},
+            "paths": paths,
+            "finished": finished,
+            "stale": time.time() - os.path.getmtime(path) > STALE_S,
+        })
+    return out
+
+
+def deny(msg):
+    print(f"writer-guard: {msg}", file=sys.stderr)
+    sys.exit(2)
+
+
+def main():
+    try:
+        payload = json.load(sys.stdin)
+    except ValueError:
+        return
+    tool = payload.get("tool_name")
+    inp = payload.get("tool_input") or {}
+    transcript = payload.get("transcript_path") or ""
+    if not transcript.endswith(".jsonl"):
+        return
+    session_dir = transcript[: -len(".jsonl")]
+    if not os.path.isdir(os.path.join(session_dir, "subagents")):
+        return
+
+    if tool == "Agent":
+        prompt = inp.get("prompt") or ""
+        wanted = claims(prompt)
+        if not wanted or "writer-guard: takeover" in prompt:
+            return
+        for a in agents(session_dir):
+            clash = wanted & a["paths"]
+            if clash and not a["finished"] and not a["stale"]:
+                deny(f"{a['name']} is still running and owns {', '.join(sorted(clash))}. "
+                     "Wait for its report and dispatch the follow-up after it, or send the change to it "
+                     "(SendMessage), never both. If it was TaskStopped or is stuck on an unanswered prompt, "
+                     "add the line `writer-guard: takeover` to the new brief.")
+    elif tool == "SendMessage":
+        to = inp.get("to") or ""
+        message = inp.get("message")
+        text = message if isinstance(message, str) else json.dumps(message or "")
+        if "writer-guard: resume" in text:
+            return
+        for a in agents(session_dir):
+            if to in a["names"] and a["paths"] and a["finished"]:
+                deny(f"{a['name']} has finished and owns {', '.join(sorted(a['paths']))}; a message resumes it "
+                     "as a writer, possibly beside a newer owner. Dispatch a fresh agent with the full brief "
+                     "instead. To resume an agent that died on an API/auth error, put `writer-guard: resume` "
+                     "in the message.")
+
+
+if __name__ == "__main__":
+    main()
