@@ -25,7 +25,5 @@ review-ledger.jsonl
 .env
 .env.*
 
-# 2026-09-17: the deny-list that used to sit here is gone. The repo is private and
-# personal, and every skill, agent and command in it is tracked on purpose. What
-# stays out is credentials, customer data, per-machine run data and backups — the
-# rules above, which are about content, not about which customisation it belongs to.
+# This repository is public. What stays out is credentials, customer data,
+# employer-specific adapter values, per-machine run data and backups — the rules above.
