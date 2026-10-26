@@ -145,6 +145,7 @@ Measured, never estimated: `scripts/run-metrics.py` reads the Claude Code transc
 - **Per reviewer pass.** `report` also writes `/tmp/<slug>/review-runs.skeleton.jsonl`, one record per review/recheck agent with time and tokens filled. The controller fills lens and finding counts from the ledger and saves it as `review-runs.jsonl` (Phase 11). Pass `--artifacts <dir>` and `report` notes when it is missing.
 - **Done:** `mark <slug> done`, then `run-metrics.py report` (Phase 11). Output: `/tmp/<slug>/step-metrics.json` and this run's rows in `<skill-dir>/step-metrics.csv` — one per agent, task, inline step, controller-per-phase, phase and total, with `wall_s`, `active_s`, `human_wait_s`, `idle_s`, and `input`/`cache_write`/`cache_read`/`output` tokens by model. `total_tokens` is cumulative billed context (cache reads dominate); compare `output` and `cache_write` across runs first.
 - Rerunning `report` is safe (it replaces the run's rows). It works mid-run too, for a status check.
+- **Across runs:** `run-metrics.py rollup` joins every run (`runs/`, `metrics.csv`, `step-metrics.csv` and the target-repo review directories listed in `rollup-sources.local.json`) into `runs/_rollup/{runs,steps,reviews}.json`; `run-metrics.py show [--run ID | --lenses | --phases | --failures | --retro]` reads them. Phase 11 runs `rollup` and refreshes the cross-run dashboard (`reference/metrics-dashboard.md`).
 
 ## Model matrix
 

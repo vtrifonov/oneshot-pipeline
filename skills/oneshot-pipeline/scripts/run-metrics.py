@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Per-phase and per-step time and token metrics for a one-shot run.
 
-Two subcommands:
+Four subcommands (rollup and show live in metrics_rollup.py):
 
   mark <slug> phase <N>        phase N starts now (0..11; the previous phase ends)
   mark <slug> start <step>     an inline controller step starts (e.g. p6-task-3, p8-gates)
@@ -14,6 +14,12 @@ Two subcommands:
 
   report <slug> [--run-id ID] [--mode M] [--lane L] [--csv PATH] [--no-csv]
                 [--artifacts DIR]
+  rollup [--home DIR] [--papercuts PATH]
+                               cross-run tables in <skill-dir>/runs/_rollup/ (runs, steps,
+                               reviews); copies newer artifacts from the run directories
+                               listed in rollup-sources.local.json into runs/<run_id>/
+  show [--run ID | --lenses | --phases | --failures | --retro | --json] [--all]
+                               text views over the rollup; default: the last 15 runs
 
 Marks go to /tmp/<slug>/marks.tsv (ISO time, kind, label[, agent]). report reads the
 Claude Code transcripts, so nothing has to be logged by hand per agent:
@@ -51,6 +57,9 @@ import json
 import os
 import pathlib
 import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import metrics_rollup  # noqa: E402
 
 SKILL_DIR = pathlib.Path(__file__).resolve().parent.parent
 CSV_FIELDS = [
@@ -487,8 +496,13 @@ def main():
     report.add_argument("--csv")
     report.add_argument("--no-csv", action="store_true")
     report.add_argument("--artifacts")
+    metrics_rollup.add_subcommands(sub)
     args = parser.parse_args()
-    return cmd_mark(args) if args.cmd == "mark" else cmd_report(args)
+    if args.cmd == "mark":
+        return cmd_mark(args)
+    if args.cmd == "report":
+        return cmd_report(args)
+    return args.func(args)
 
 
 if __name__ == "__main__":
