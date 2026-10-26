@@ -125,6 +125,16 @@ Controller disposition: validate premises and deduplicate first; mark accepted/r
 - **Past ~150 tool calls, an author or implementer writes a progress note and stops**; a fresh agent continues from it. Context above ~150k is where long agents burn money.
 - **The final report is your last message and/or the deliverable file.** Do not also SendMessage the controller at the end: it double-notifies.
 
+## Step metrics — time and tokens for every phase, agent and inline step
+
+Measured, never estimated: `scripts/run-metrics.py` reads the Claude Code transcripts (controller session + `subagents/agent-*.jsonl`) and attributes every API message's usage and timestamps. The controller only stamps boundaries; `<skill-dir>` is this file's directory, `<slug>` the run's `/tmp/<slug>`.
+
+- **Phase boundary — the first command on entering every phase, 0 through 11:** `python3 <skill-dir>/scripts/run-metrics.py mark <slug> phase <N>`. Phase 0 marks before anything else (it creates `/tmp/<slug>/marks.tsv`). Re-entering a phase (a lite→full upgrade back to 4, a reopened design) marks it again; time accumulates per phase.
+- **Inline controller step** (each §6c inline-TDD task, Phase 8 gates, an inline fix): `mark <slug> start <step>` / `mark <slug> end <step>`, step ids like `p6-task-3`, `p8-gates`. Send the end mark in a **later** turn than the work, not batched with the start mark in one response, or the window catches nothing.
+- **Agents need no marks.** Each lands in the phase active at its first message, under its dispatch `description`. So every description names phase and role: `p3 spec-security review`, `p6 T4-5 implementer`, `p10 wave-2 fixer`.
+- **Done:** `mark <slug> done`, then `run-metrics.py report` (Phase 11). Output: `/tmp/<slug>/step-metrics.json` and this run's rows in `<skill-dir>/step-metrics.csv` — one per agent, inline step, controller-per-phase, phase and total, with `wall_s`, `active_s`, `human_wait_s`, `idle_s`, and `input`/`cache_write`/`cache_read`/`output` tokens by model. `total_tokens` is cumulative billed context (cache reads dominate); compare `output` and `cache_write` across runs first.
+- Rerunning `report` is safe (it replaces the run's rows). It works mid-run too, for a status check.
+
 ## Model matrix
 
 Claude defaults below: pass `model` when that alias is available. Other runtimes use the adapter's available model mapping or inherit; never pass unavailable aliases. **No-fable mode (the user's choice — named at invocation or picked at the Phase 0 ask, see § Run options):** when it is on, every `fable` row below runs on `opus` instead — brainstorm, plan author/reviser and wave fixer (10a dispatch `model: opus`; 10b pass `fixModel: 'opus'` in the Workflow args). Nothing else changes: same agents, same sole-writer ownership, same phases. Like quick mode it is orthogonal to lane and mode, recommended but never self-selected, never dropped mid-run; record it by suffixing the metrics row's `mode` value with `+nofable` (`standard+nofable`, `quick+nofable`) — the 19-column schema stays fixed. Wherever a phase reference says `fable`, read "the plan/design/fixer model". **If `fable` is not available in the runtime, the brainstorm, plan and wave-fixer agents fall back to `opus`** — they stay subagents either way, because the phase structure (design brief file, one sole writer per artifact) is what makes revisions cheap, not the model alias. `fable` goes where judgment beats prose: design exploration, task decomposition, and disputing reviewer claims; it is never used on parallel panels, where tier cost multiplies.
@@ -147,6 +157,8 @@ Claude defaults below: pass `model` when that alias is available. Other runtimes
 
 ## Phase map — the one rule per phase you must not forget
 
+Every phase opens with `run-metrics.py mark <slug> phase <N>` (§ Step metrics).
+
 0. **Setup** — read repository adapter; resolve base branch, worktree root, domain risks, tools, and CI gates; new worktree via `~/.claude/bin/wt-create <branch> --base <ref>`; one implementation writer per worktree; reviewers own separate findings files. Last step: **ask any unnamed run option** (mode, model set, and frontend design when the request touches UI and no repo preference is stored) in one round, recommended choice first (§ Run options, § Frontend design) — before the brainstorm dispatch.
 1. **Brainstorm** — the ONLY planned design check-in (the Phase 0 run-options ask, when needed, is the other planned touchpoint). A **`fable` design agent** drafts questions and options; the controller relays them to the user and their answers back. Collect standing decisions, state the provisional lane, estimate the PR size against the size budget (Contract), and if it is over, propose the split or get the override in this same round. Then write `approved=` to `/tmp/<slug>/timeline.txt`.
 2. **Spec** — an **`opus` spec agent** writes the file under `docs/superpowers/specs/`; controller confirms the lane against it.
@@ -158,7 +170,7 @@ Claude defaults below: pass `model` when that alias is available. Other runtimes
 8. **Pre-push gates** — controller runs adapter CI gates: full local suite/build here, scoped tests during implementation; optional hook override and independently checked packages in Phase 8 reference. Mechanical lane evaluation on committed branch diff. Measure the size budget on the same diff; over budget without an override → ask before push.
 9. **PR** — rebase before first push, then merge-in only; every push is a wave; batch the PUSH, never the WORK; never open red; flaky check → `rerun-failed`, never a commit.
 10. **Shepherd** — fresh `pr-shepherd` per wave, dispatched at wave 1 never at `gh pr create`; `review-wait` → `pr-threads --reviews` → triage → dispatch → `audit-wait` after any thread close (`--trigger` on a close with no push: it posts the one `/ai-review` comment the bot needs); heartbeat every ~30 min (10a) with `delaySeconds` + `prompt` + `reason`.
-11. **Done** — checks green, zero unresolved threads, `reviewDecision` APPROVED, `audit-wait` none pending, `ready=` in timeline, **metrics row appended** (with `mode`) to `metrics.csv`, review ledger/per-pass metrics and run summary persisted. Retro after ten comparable completed runs.
+11. **Done** — checks green, zero unresolved threads, `reviewDecision` APPROVED, `audit-wait` none pending, `ready=` in timeline, **`mark done` + `run-metrics.py report`** (step-metrics.csv), **metrics row appended** (with `mode`) to `metrics.csv`, review ledger/per-pass metrics and run summary persisted. Retro after ten comparable completed runs.
 
 ## Red flags — stop and self-check
 
@@ -178,6 +190,8 @@ Claude defaults below: pass `model` when that alias is available. Other runtimes
 | "Reviewer marked it MAJOR" | Severity comes from the failure scenario. No scenario → MINOR, whatever the label. |
 | "Lite lane, so one review pass" | Lite drops security/architecture review, never `correctness/testing review`. Full runs both. |
 | "I'll add the metrics row later" | Done includes the row. Later is never; the retro then has nothing to read. |
+| "I'll mark the phase once I've got going" | The mark is the phase's first command. A late mark bills this phase's work to the previous one, and the retro compares the wrong numbers. |
+| "I'll estimate the tokens for the summary" | `run-metrics.py report` reads them from the transcripts. A missing number is a `note:`, never a guess. |
 | "Full local suite before every push" | Scoped tests locally; CI is the gate. |
 | "Pre-approval covers this second PR too" | It covers exactly one PR — the one this invocation produces. |
 | "It's 4,600 lines, but the playbook pre-approved the push" | Pre-approval stops at 4,000 lines / 75 files / 200 KB. Past that, PushNotification + ask with the numbers and a split. |

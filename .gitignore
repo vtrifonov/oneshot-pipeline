@@ -14,6 +14,7 @@
 
 # Per-machine run data — every pipeline run appends to it
 metrics.csv
+step-metrics.csv
 review-runs.jsonl
 review-ledger.jsonl
 /skills/oneshot-pipeline/runs/
