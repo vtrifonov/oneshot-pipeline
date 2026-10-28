@@ -183,6 +183,21 @@ def fmt_effort(counter):
     return "+".join(level for level, _ in counter.most_common()) if counter else ""
 
 
+# User entries the harness writes on the user's behalf: a gap before one of these is the
+# controller waiting on an agent, a compaction or a timer, not on the human.
+NOT_TYPED_PREFIXES = (
+    "<",
+    "Another Claude session sent a message",
+    "This session is being continued from a previous conversation",
+    "Heartbeat for ",
+    "[SYSTEM NOTIFICATION",
+)
+
+
+def typed_by_human(text):
+    return not text.lstrip().startswith(NOT_TYPED_PREFIXES)
+
+
 def read_transcript(path, start, end, skip_sidechain):
     """Return (messages, events). messages: one per API message id, in time order.
     events: (ts, role, is_human) for every entry, used for wait/idle gaps."""
@@ -242,11 +257,11 @@ def read_transcript(path, start, end, skip_sidechain):
             else:
                 is_human = False
                 if isinstance(content, str):
-                    is_human = not entry.get("isMeta") and not content.startswith("<")
+                    is_human = not entry.get("isMeta") and typed_by_human(content)
                 elif isinstance(content, list):
                     for block in content:
                         if block.get("type") == "text" and not entry.get("isMeta"):
-                            is_human = not block.get("text", "").lstrip().startswith("<")
+                            is_human = typed_by_human(block.get("text", ""))
                         elif block.get("type") == "tool_result" and block.get("tool_use_id") in ask_ids:
                             is_human = True
                 events.append((ts, "user", is_human))

@@ -94,6 +94,10 @@ unavailable in the session; the tables are still rebuilt locally.
 
 - `total_tokens` is dominated by cache reads; compare `output` and `cache_write` first.
 - `effort` is `?`/empty on rows reported before 2026-10-28; `show --effort` groups them separately.
+- `human_wait_s` on rows reported before 2026-10-28 and not re-reported since (codex-usage-2026-10-26 and
+  earlier) counts agent notifications ("Another Claude session sent a message") as typed input, so it
+  overstates waiting by up to 10x; after the fix, real human wait is minutes per run unless the user
+  was away.
 - Step rows before 2026-10-26 have no `task` rows; batched implementers before then are one row each.
 - Some per-task splits were backfilled from commit times (`metrics_quality_notes` says so).
 - `metrics.csv` B/M/m before policy `2026-09-risk-panels` are not comparable to later rows.

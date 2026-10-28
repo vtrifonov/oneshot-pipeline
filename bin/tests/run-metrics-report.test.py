@@ -52,7 +52,7 @@ class ReportTest(unittest.TestCase):
         self.marks = Path("/tmp") / self.slug
         self.marks.mkdir()
         (self.marks / "marks.tsv").write_text(
-            f"{T0}00Z\tphase\t0\n{T0}20Z\tphase\t6\n{T0}50Z\tdone\n")
+            f"{T0}00Z\tphase\t0\n{T0}20Z\tphase\t6\n2026-10-20T10:01:50Z\tdone\n")
         session = self.config / "projects" / "-proj" / "session-1.jsonl"
         write_jsonl(session, [
             user(f"{T0}01Z", f"python3 run-metrics.py mark {self.slug} phase 0"),
@@ -67,6 +67,10 @@ class ReportTest(unittest.TestCase):
             request(f"{T0}25Z", "req-orphan"),  # retried request with no assistant entry: ignored
             request(f"{T0}26Z", "req-3"),
             assistant(f"{T0}28Z", "msg-3", "claude-opus-5-5", 100, 10, "high", "req-3", 0, think_ms=100),
+            # 40s gap ended by an agent notification: idle (agent work), not human wait.
+            user("2026-10-20T10:01:08Z", "Another Claude session sent a message:\n<teammate-message>done</teammate-message>"),
+            # 35s gap ended by a typed message: human wait.
+            user("2026-10-20T10:01:43Z", "continue"),
         ])
         agent_dir = session.parent / "session-1" / "subagents"
         write_jsonl(agent_dir / "agent-a1.jsonl", [
@@ -114,6 +118,8 @@ class ReportTest(unittest.TestCase):
         p6 = by_phase[("controller", "6")]
         self.assertEqual(p6["effort"], "high")
         self.assertEqual(p6["latency_s"], 2)
+        self.assertEqual(p6["human_wait_s"], 35)   # only the gap before the typed "continue"
+        self.assertEqual(p6["idle_s"], 0)          # the 40s gap before the agent message is under IDLE_GAP_S
         agent = rows[("agent", "p6 T1 implementer")]
         self.assertEqual(agent["effort"], "medium")
         self.assertEqual(agent["thinking_tokens"], 100)
