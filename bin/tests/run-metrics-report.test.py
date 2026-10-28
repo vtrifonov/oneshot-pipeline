@@ -64,6 +64,7 @@ class ReportTest(unittest.TestCase):
             request(f"{T0}10Z", "req-2"),
             assistant(f"{T0}14Z", "msg-2", "claude-opus-5-5", 300, 0, "high", "req-2", 0),
             user(f"{T0}25Z", f"python3 run-metrics.py mark {self.slug} phase 6"),
+            request(f"{T0}25Z", "req-orphan"),  # retried request with no assistant entry: ignored
             request(f"{T0}26Z", "req-3"),
             assistant(f"{T0}28Z", "msg-3", "claude-opus-5-5", 100, 10, "high", "req-3", 0, think_ms=100),
         ])
