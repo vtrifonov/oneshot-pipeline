@@ -33,7 +33,11 @@ Claude Code transcripts, so nothing has to be logged by hand per agent:
 
 Only messages between the first mark and the done mark (or now) count. Usage
 is deduplicated per API message id. Tokens are split into input (uncached),
-cache_write, cache_read and output, per model.
+cache_write, cache_read and output, per model. Each row also carries the
+reasoning `effort` the entries ran at (dominant level first: `medium`,
+`high+medium`), `thinking_tokens` (a part of output), `thinking_s` (summed
+thinkingDurationMs) and `latency_s` (api-request entry to the last assistant
+entry of that request: model time plus queueing, summed over messages).
 
 - Tasks: an agent that implements several plan tasks is split at its task
   marks into one `task` row per task (its messages before the first mark go
@@ -66,8 +70,12 @@ CSV_FIELDS = [
     "run_id", "date", "mode", "lane", "phase", "kind", "step", "agent_type", "model", "depth",
     "started_at", "ended_at", "wall_s", "active_s", "human_wait_s", "idle_s", "messages",
     "input", "cache_write", "cache_read", "output", "total_tokens",
+    "effort", "thinking_tokens", "thinking_s", "latency_s",
 ]
 TOKEN_KEYS = ["input", "cache_write", "cache_read", "output"]
+# Per-message extras summed like tokens: thinking tokens (already inside output), thinking
+# wall time, and API latency (api-request entry to the last assistant entry of that request).
+EXTRA_KEYS = ["thinking_tokens", "thinking_s", "latency_s"]
 HUMAN_GAP_S = 30
 IDLE_GAP_S = 120
 REVIEW_STEP = re.compile(r"review|recheck", re.IGNORECASE)
@@ -147,22 +155,32 @@ def review_skeleton(run_id, phase, step, agent_id, first, last, tokens):
         "started_at": iso(first), "finished_at": iso(last),
         "elapsed_seconds": round((last - first).total_seconds()),
         "tokens": sum(tokens[k] for k in TOKEN_KEYS), "output_tokens": tokens["output"],
+        "effort": fmt_effort(tokens["effort"]), "thinking_tokens": tokens["thinking_tokens"],
         "cost": None, "currency": None, "reported_bmm": None, "unique_accepted_bmm": None,
         "duplicate_count": None, "rejected_count": None, "unresolved_count": None, "finding_ids": None,
     }
 
 
 def empty_tokens():
-    return {key: 0 for key in TOKEN_KEYS}
+    out = {key: 0 for key in TOKEN_KEYS + EXTRA_KEYS}
+    out["effort"] = collections.Counter()
+    return out
 
 
 def usage_tokens(usage):
+    details = usage.get("output_tokens_details") or {}
     return {
         "input": usage.get("input_tokens") or 0,
         "cache_write": usage.get("cache_creation_input_tokens") or 0,
         "cache_read": usage.get("cache_read_input_tokens") or 0,
         "output": usage.get("output_tokens") or 0,
+        "thinking_tokens": details.get("thinking_tokens") or 0,
     }
+
+
+def fmt_effort(counter):
+    """Dominant effort first, others joined with '+': 'medium', 'high+medium'."""
+    return "+".join(level for level, _ in counter.most_common()) if counter else ""
 
 
 def read_transcript(path, start, end, skip_sidechain):
@@ -171,6 +189,8 @@ def read_transcript(path, start, end, skip_sidechain):
     by_id = {}
     events = []
     ask_ids = set()
+    requests = {}      # api-request id -> sent timestamp
+    request_last = {}  # api-request id -> (last assistant entry ts, message id)
     with path.open(errors="replace") as fh:
         for line in fh:
             try:
@@ -178,6 +198,9 @@ def read_transcript(path, start, end, skip_sidechain):
             except ValueError:
                 continue
             raw_ts = entry.get("timestamp")
+            if raw_ts and entry.get("type") == "api-request" and entry.get("id"):
+                requests[entry["id"]] = parse_ts(raw_ts)
+                continue
             if not raw_ts or entry.get("type") not in ("assistant", "user"):
                 continue
             if skip_sidechain and entry.get("isSidechain"):
@@ -198,11 +221,24 @@ def read_transcript(path, start, end, skip_sidechain):
                 if not msg_id or not usage or model == "<synthetic>":
                     continue
                 tokens = usage_tokens(usage)
+                tokens["thinking_s"] = (entry.get("thinkingDurationMs") or 0) / 1000
+                tokens["latency_s"] = 0
+                tokens["effort"] = collections.Counter()
                 seen = by_id.get(msg_id)
                 if seen:
-                    seen["tokens"] = {k: max(seen["tokens"][k], tokens[k]) for k in TOKEN_KEYS}
+                    # One API message is logged once per content block with the same usage: keep
+                    # the max per token key, but thinking time is per block and adds up.
+                    for key in TOKEN_KEYS + ["thinking_tokens"]:
+                        seen["tokens"][key] = max(seen["tokens"][key], tokens[key])
+                    seen["tokens"]["thinking_s"] += tokens["thinking_s"]
                 else:
-                    by_id[msg_id] = {"ts": ts, "model": model, "tokens": tokens}
+                    seen = by_id[msg_id] = {"ts": ts, "model": model, "tokens": tokens}
+                    level = entry.get("effort") or entry.get("perTurnEffort")
+                    if level:
+                        seen["tokens"]["effort"][level] += 1
+                ref = entry.get("requestRef")
+                if ref:
+                    request_last[ref] = (max(ts, request_last.get(ref, (ts, None))[0]), msg_id)
             else:
                 is_human = False
                 if isinstance(content, str):
@@ -214,6 +250,10 @@ def read_transcript(path, start, end, skip_sidechain):
                         elif block.get("type") == "tool_result" and block.get("tool_use_id") in ask_ids:
                             is_human = True
                 events.append((ts, "user", is_human))
+    for ref, (last_ts, msg_id) in request_last.items():
+        sent = requests.get(ref)
+        if sent is not None and msg_id in by_id:
+            by_id[msg_id]["tokens"]["latency_s"] = max(0.0, (last_ts - sent).total_seconds())
     messages = sorted(by_id.values(), key=lambda m: m["ts"])
     return messages, sorted(events, key=lambda e: e[0])
 
@@ -246,8 +286,9 @@ def phase_at(phase_marks, ts):
 
 
 def add_tokens(target, tokens):
-    for key in TOKEN_KEYS:
-        target[key] += tokens[key]
+    for key in TOKEN_KEYS + EXTRA_KEYS:
+        target[key] += tokens.get(key) or 0
+    target["effort"].update(tokens.get("effort") or {})
 
 
 def summarize(messages):
@@ -281,6 +322,10 @@ def row(base, **fields):
     for key in TOKEN_KEYS:
         out[key] = tokens[key]
     out["total_tokens"] = sum(tokens[k] for k in TOKEN_KEYS)
+    out["effort"] = fmt_effort(tokens["effort"])
+    out["thinking_tokens"] = tokens["thinking_tokens"]
+    out["thinking_s"] = round(tokens["thinking_s"])
+    out["latency_s"] = round(tokens["latency_s"])
     return out
 
 
@@ -458,11 +503,14 @@ def cmd_report(args):
             writer.writerows(kept)
             writer.writerows(rows)
 
-    print(f"{'phase':<6}{'kind':<11}{'wall':>7}{'active':>7}{'wait':>6}{'idle':>6}{'tokens':>11}{'out':>9}  step")
+    print(f"{'phase':<6}{'kind':<11}{'wall':>7}{'active':>7}{'wait':>6}{'idle':>6}{'tokens':>11}{'out':>9}"
+          f"{'think':>7}{'lat':>7}  step")
     for r in rows:
+        tag = " ".join(x for x in (r["model"], r["effort"]) if x)
         print(f"{r['phase']:<6}{r['kind']:<11}{fmt_s(r['wall_s']):>7}{fmt_s(r['active_s']):>7}"
               f"{fmt_s(r['human_wait_s']):>6}{fmt_s(r['idle_s']):>6}{fmt_k(r['total_tokens']):>11}"
-              f"{fmt_k(r['output']):>9}  {r['step'][:48]} {('[' + r['model'] + ']') if r['model'] else ''}")
+              f"{fmt_k(r['output']):>9}{fmt_k(r['thinking_tokens']):>7}{fmt_s(r['latency_s']):>7}"
+              f"  {r['step'][:48]} {('[' + tag + ']') if tag else ''}")
     for note in notes:
         print(f"note: {note}")
     return 0

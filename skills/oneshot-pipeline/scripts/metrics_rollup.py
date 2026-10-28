@@ -40,7 +40,7 @@ CSV_NUMERIC = ("waves", "bot_threads", "threads_fixed", "threads_closed_no_chang
                "parked", "defects_90d")
 CSV_HOURS = ("h_approved_to_pr", "h_pr_to_ready")
 STEP_INT = ("wall_s", "active_s", "human_wait_s", "idle_s", "messages", "input", "cache_write",
-            "cache_read", "output", "total_tokens", "depth")
+            "cache_read", "output", "total_tokens", "depth", "thinking_tokens", "thinking_s", "latency_s")
 FAILURE_CLASSES = {
     "stopped_agents": re.compile(r"\bstopped\b", re.I),
     "duplicate_writers": re.compile(r"duplicate (writer|author|agent|spec|plan|implementer)|second writer", re.I),
@@ -312,7 +312,8 @@ def step_totals(rows):
         "wall_s": total.get("wall_s"), "human_wait_s": total.get("human_wait_s"),
         "idle_s": total.get("idle_s"), "output": total.get("output"),
         "cache_write": total.get("cache_write"), "total_tokens": total.get("total_tokens"),
-        "agents": agents,
+        "thinking_tokens": total.get("thinking_tokens"), "latency_s": total.get("latency_s"),
+        "effort": total.get("effort") or None, "agents": agents,
     }
 
 
@@ -446,6 +447,7 @@ def review_row(rec, run):
         "reviewer_id": rec.get("reviewer_id"), "lens": lens, "pass_kind": rec.get("pass_kind"),
         "started_at": rec.get("started_at"), "elapsed_seconds": to_int(rec.get("elapsed_seconds")),
         "tokens": to_int(rec.get("tokens")), "output_tokens": to_int(rec.get("output_tokens")),
+        "effort": rec.get("effort") or None, "thinking_tokens": to_int(rec.get("thinking_tokens")),
         "reported": list(reported) if reported else None,
         "accepted": list(accepted) if accepted else None,
         "accepted_bm": (accepted[0] + accepted[1]) if accepted else None,
@@ -630,17 +632,20 @@ def show_run(tables, run_id):
     if steps:
         print("\nsteps")
         rows = [[s.get("phase"), s.get("kind"), fmt_s(s.get("wall_s")), fmt_s(s.get("active_s")),
-                 fmt_s(s.get("human_wait_s")), fmt_k(s.get("output")), fmt_k(s.get("cache_write")),
-                 fmt_k(s.get("total_tokens")), (s.get("step") or "")[:50], s.get("model") or ""]
+                 fmt_s(s.get("human_wait_s")), fmt_k(s.get("output")), fmt_k(s.get("thinking_tokens")),
+                 fmt_s(s.get("latency_s")), fmt_k(s.get("cache_write")), fmt_k(s.get("total_tokens")),
+                 (s.get("step") or "")[:50], s.get("model") or "", s.get("effort") or "-"]
                 for s in steps]
-        print_table(["phase", "kind", "wall", "active", "wait", "out", "cache_w", "total", "step", "model"], rows)
+        print_table(["phase", "kind", "wall", "active", "wait", "out", "think", "latency", "cache_w", "total",
+                     "step", "model", "effort"], rows)
     reviews = [r for r in tables["reviews"] if r["run_id"] == run["run_id"]]
     if reviews:
         print("\nreview passes")
-        rows = [[r.get("phase"), r.get("pass_kind"), r.get("lens"), fmt_s(r.get("elapsed_seconds")),
-                 fmt_k(r.get("output_tokens")), fmt_k(r.get("tokens")), fmt_bmm(r.get("reported")),
-                 fmt_bmm(r.get("accepted"))] for r in reviews]
-        print_table(["phase", "kind", "lens", "elapsed", "out", "tokens", "reported", "accepted"], rows)
+        rows = [[r.get("phase"), r.get("pass_kind"), r.get("lens"), r.get("effort") or "-",
+                 fmt_s(r.get("elapsed_seconds")), fmt_k(r.get("output_tokens")), fmt_k(r.get("thinking_tokens")),
+                 fmt_k(r.get("tokens")), fmt_bmm(r.get("reported")), fmt_bmm(r.get("accepted"))] for r in reviews]
+        print_table(["phase", "kind", "lens", "effort", "elapsed", "out", "think", "tokens", "reported", "accepted"],
+                    rows)
 
 
 def lens_stats(reviews):
@@ -693,7 +698,7 @@ def phase_medians(steps, key):
 
 def show_phases(tables):
     steps = tables["steps"]
-    for key in ("wall_s", "output", "cache_write"):
+    for key in ("wall_s", "output", "cache_write", "thinking_tokens", "latency_s"):
         medians = phase_medians(steps, key)
         rows = []
         for (lane, phase), median in sorted(medians.items(), key=lambda kv: (kv[0][0], phase_sort(kv[0][1]))):
@@ -703,6 +708,66 @@ def show_phases(tables):
             rows.append([lane, phase, len(values), fmt(median), fmt(max(values)), fmt(min(values))])
         print(f"\n{key} per phase (phase rows)")
         print_table(["lane", "phase", "n", "median", "max", "min"], rows)
+
+
+def role_of(step):
+    """Coarse role from a dispatch description, for the effort view."""
+    text = (step.get("step") or "").lower()
+    kind = step.get("kind")
+    if kind == "task":
+        return "task"
+    if kind in ("controller", "inline"):
+        return kind
+    if re.search(r"recheck|revis|\br\d\b", text):
+        return "recheck/revision"
+    if re.search(r"review|\brev\b|panel", text):
+        return "reviewer"
+    if re.search(r"implement|\bimpl\b|\bt\d+\b|fix", text):
+        return "implementer"
+    if re.search(r"spec|plan|design|brainstorm", text):
+        return "author"
+    if re.search(r"wave|shepherd|merge|classify|triage", text):
+        return "shepherd"
+    return "other"
+
+
+def effort_stats(steps):
+    """Per (role, model, effort): agents, medians of output, thinking share, latency per message."""
+    groups = collections.defaultdict(list)
+    for row in steps:
+        if row.get("kind") not in ("agent", "task", "controller", "inline") or not row.get("messages"):
+            continue
+        groups[(role_of(row), row.get("model") or "?", row.get("effort") or "?")].append(row)
+    out = []
+    for (role, model, effort), rows in groups.items():
+        output = [r.get("output") or 0 for r in rows]
+        thinking = [r.get("thinking_tokens") or 0 for r in rows]
+        share = [t / o for t, o in zip(thinking, output) if o]
+        latency = [(r.get("latency_s") or 0) / r["messages"] for r in rows if r.get("latency_s") not in (None, "")]
+        active = [r.get("active_s") or 0 for r in rows if r.get("kind") in ("agent", "task")]
+        out.append({
+            "role": role, "model": model, "effort": effort, "n": len(rows),
+            "runs": len({r["run_id"] for r in rows}),
+            "output_median": statistics.median(output),
+            "output_per_msg": statistics.median((r.get("output") or 0) / r["messages"] for r in rows),
+            "thinking_share": statistics.median(share) if share else None,
+            "latency_per_msg": statistics.median(latency) if latency else None,
+            "active_median": statistics.median(active) if active else None,
+        })
+    out.sort(key=lambda s: (s["role"], s["model"], s["effort"]))
+    return out
+
+
+def show_effort(tables):
+    rows = [[s["role"], s["model"], s["effort"], s["n"], s["runs"], fmt_k(s["output_median"]),
+             f"{s['output_per_msg']:.0f}",
+             "-" if s["thinking_share"] is None else f"{s['thinking_share']:.0%}",
+             "-" if s["latency_per_msg"] is None else f"{s['latency_per_msg']:.1f}s",
+             fmt_s(s["active_median"])] for s in effort_stats(tables["steps"])]
+    print_table(["role", "model", "effort", "n", "runs", "out med", "out/msg", "think%", "lat/msg", "active med"],
+                rows)
+    print("\nthink% = thinking tokens as a share of output (median per agent); lat/msg = API latency per message;"
+          "\neffort '?' = run reported before effort was recorded")
 
 
 def phase_sort(phase):
@@ -797,6 +862,9 @@ def cmd_show(args):
     if args.retro:
         show_retro(tables)
         any_view = True
+    if args.effort:
+        show_effort(tables)
+        any_view = True
     if not any_view:
         show_runs(tables, None if args.all else SHOW_DEFAULT_RUNS)
     return 0
@@ -815,6 +883,8 @@ def add_subcommands(sub):
     show.add_argument("--phases", action="store_true", help="per-phase medians and extremes per lane")
     show.add_argument("--failures", action="store_true", help="failure classes and papercuts per run")
     show.add_argument("--retro", action="store_true", help="retro candidates (same rules as the dashboard)")
+    show.add_argument("--effort", action="store_true",
+                      help="output, thinking share and latency per role, model and reasoning effort")
     show.add_argument("--json", action="store_true", help="retro candidates and lens stats as JSON")
     show.set_defaults(func=cmd_show)
 

@@ -263,6 +263,7 @@ if bash "$BIN/tests/wt-create.test.sh" >"$TMP/wt.out" 2>&1; then ok; else bad "w
 if python3 "$BIN/tests/stall-watch.test.py" >"$TMP/sw.out" 2>&1; then ok; else bad "stall-watch.test.py" "$(cat "$TMP/sw.out")"; fi
 if python3 "$BIN/tests/papercut.test.py" >"$TMP/pc.out" 2>&1; then ok; else bad "papercut.test.py" "$(cat "$TMP/pc.out")"; fi
 if python3 "$BIN/tests/metrics-rollup.test.py" >"$TMP/mr.out" 2>&1; then ok; else bad "metrics-rollup.test.py" "$(cat "$TMP/mr.out")"; fi
+if python3 "$BIN/tests/run-metrics-report.test.py" >"$TMP/rr.out" 2>&1; then ok; else bad "run-metrics-report.test.py" "$(cat "$TMP/rr.out")"; fi
 if bash "$BIN/tests/derived-check.test.sh" >"$TMP/dc.out" 2>&1; then ok; else bad "derived-check.test.sh" "$(cat "$TMP/dc.out")"; fi
 
 echo "passed=$pass failed=$fail"

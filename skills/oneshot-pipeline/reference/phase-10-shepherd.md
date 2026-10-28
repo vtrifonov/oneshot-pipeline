@@ -13,7 +13,7 @@ The controller owns the loop. A fresh pr-shepherd handles one prepared wave and 
 Done requires all required checks/approvals for the current head, zero unresolved required threads or material findings, and no pending required audit. No broad exclusion of human review gates.
 
 #### 10b. Optional Workflow loop
-Use shepherd-waves.js only with a compatible Workflow runtime and the configured marker-compatible bot. Confirm explicit opt-in required by the runtime. It applies the same triage, wave and audit contracts with a bounded wave limit.
+Use shepherd-waves.js only with a compatible Workflow runtime and the configured marker-compatible bot. Confirm explicit opt-in required by the runtime. It applies the same triage, wave and audit contracts with a bounded wave limit. Pass the model-matrix effort explicitly in the args (`fixEffort: 'high'`, `classifyEffort: 'medium'`) alongside `fixModel`; the two are separate so no-fable mode changes the model and nothing else.
 Before resuming, verify no live writer owns the worktree and inspect worktree state; the script cannot establish this itself. Restart the runtime after installing a new agent definition.
 
 #### Liveness and limits

@@ -9,7 +9,9 @@ export const meta = {
   ],
 }
 
-// args: { pr, worktree, slug, standingDecisions?, maxWaves?, reportDir?, fixModel? }
+// args: { pr, worktree, slug, standingDecisions?, maxWaves?, reportDir?, fixModel?, fixEffort?, classifyEffort? }
+// fixEffort / classifyEffort: reasoning effort for the fixer and the classifier ('low'..'max'); unset = the
+// session default. Kept separate from fixModel so no-fable mode (fixModel 'opus') never changes effort by accident.
 const a = args || {}
 if (!a.pr || !a.worktree) throw new Error('args.pr and args.worktree are required')
 const PR = String(a.pr)
@@ -18,6 +20,8 @@ const SLUG = a.slug || `pr-${PR}`
 const MAX_WAVES = a.maxWaves || 6
 const REPORT_DIR = a.reportDir || `/tmp/${SLUG}`
 const FIX_MODEL = a.fixModel || 'fable'
+const FIX_EFFORT = a.fixEffort ? { effort: a.fixEffort } : {}
+const CLASSIFY_EFFORT = a.classifyEffort ? { effort: a.classifyEffort } : {}
 const STANDING = a.standingDecisions || '(none given — park spec conflicts, do not decide them)'
 
 const CONTRACT = `Finding contract. A finding has four parts in this order: severity, claim (one sentence), failure scenario (concrete input or state -> wrong output, crash, or violated invariant), fix sketch. Severity is DERIVED from the scenario: BLOCKER = security, data loss, deploy-safety rule, or spec requirement not met; MAJOR = correctness bug, missing test for a stated invariant, coupled surface left out; MINOR = anything without a concrete failure scenario (style, naming, hypothetical future need, "consider", "could be cleaner"). A finding that arrives without a failure scenario is MINOR regardless of the label the reviewer put on it.`
@@ -191,7 +195,7 @@ for (let w = 1; w <= MAX_WAVES; w++) {
     return { status: 'size_gate_withheld', pr: PR, head, unresolved: wait.unresolvedThreads, waves, note: 'approval withheld with skipReason=pr_too_large: size gate, terminal — ping the owner, do not re-request review' }
   }
 
-  const cls = await agent(classifyPrompt(w, wait, parkedIds), { label: `classify:w${w}`, phase: 'Classify', schema: CLASSIFY_SCHEMA, model: 'sonnet' })
+  const cls = await agent(classifyPrompt(w, wait, parkedIds), { label: `classify:w${w}`, phase: 'Classify', schema: CLASSIFY_SCHEMA, model: 'sonnet', ...CLASSIFY_EFFORT })
   if (!cls) return { status: 'classify_failed', pr: PR, head, waves }
   // A missing wave file must never read as zero findings (the an earlier review false merge-ready).
   if (!/^# PR #\d+ .*: \d+ unresolved of \d+ review threads/.test(cls.headerLine || '')) {
@@ -214,7 +218,7 @@ for (let w = 1; w <= MAX_WAVES; w++) {
     return { status: 'no_findings_not_approved', pr: PR, head, decision: wait.decision, reviewDecision: wait.reviewDecision, approval: wait.approval, skipReason: wait.skipReason, waves, note: 'a stale CHANGES_REQUESTED review from an earlier head may need dismissing — controller checks gh pr view --json reviews' }
   }
 
-  const fix = await agent(fixPrompt(w, wait, cls, actionable, minors, parkedIds), { label: `fix:w${w}`, phase: 'Fix', schema: FIX_SCHEMA, model: FIX_MODEL, agentType: 'pr-shepherd' })
+  const fix = await agent(fixPrompt(w, wait, cls, actionable, minors, parkedIds), { label: `fix:w${w}`, phase: 'Fix', schema: FIX_SCHEMA, model: FIX_MODEL, agentType: 'pr-shepherd', ...FIX_EFFORT })
   if (fix) {
     for (const p of fix.parked || []) if (p.id && !parkedIds.includes(String(p.id))) parkedIds.push(String(p.id))
     for (const r of fix.reopenedAfterAudit || []) if (r && !parkedIds.includes(String(r))) parkedIds.push(String(r))

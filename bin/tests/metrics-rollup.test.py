@@ -18,17 +18,20 @@ METRICS_CSV = (
     "2026-09-01,7,-,full,quick,inline-tdd,1.5,0.2,1,skipped(quick),0/1/1,0,0,0,0,4,80,1,\n"
 )
 STEP_FIELDS = ("run_id,date,mode,lane,phase,kind,step,agent_type,model,depth,started_at,ended_at,wall_s,"
-               "active_s,human_wait_s,idle_s,messages,input,cache_write,cache_read,output,total_tokens")
+               "active_s,human_wait_s,idle_s,messages,input,cache_write,cache_read,output,total_tokens,"
+               "effort,thinking_tokens,thinking_s,latency_s")
 
 
 def step_row(run_id, phase, kind, step, wall="", active="", wait="", output=1000, model="sonnet-5-5",
-             date="2026-10-03", lane="full", mode="standard"):
+             date="2026-10-03", lane="full", mode="standard", effort="medium", thinking=None, latency=30):
     return {
         "run_id": run_id, "date": date, "mode": mode, "lane": lane, "phase": phase, "kind": kind,
         "step": step, "agent_type": "", "model": model, "depth": "", "started_at": f"{date}T10:00:00Z",
         "ended_at": "", "wall_s": wall, "active_s": active, "human_wait_s": wait, "idle_s": 0,
         "messages": 3, "input": 10, "cache_write": output * 3, "cache_read": output * 50,
         "output": output, "total_tokens": output * 54 + 10,
+        "effort": effort, "thinking_tokens": output // 4 if thinking is None else thinking,
+        "thinking_s": 5, "latency_s": latency,
     }
 
 
@@ -87,6 +90,8 @@ class RollupTest(unittest.TestCase):
             step_row("ab-1001-widgets", "3", "phase", "phase 3", wall=600, wait=0, output=50000, date="2026-10-01"),
             step_row("ab-1001-widgets", "6", "phase", "phase 6", wall=1200, wait=0, output=80000, date="2026-10-01"),
             step_row("ab-1001-widgets", "6", "agent", "p6 T1-2 implementer", active=900, output=70000, date="2026-10-01"),
+            step_row("ab-1001-widgets", "7", "agent", "p7 correctness/testing review", active=400, output=20000,
+                     model="opus-5-5", effort="high", thinking=10000, latency=60, date="2026-10-01"),
             step_row("ab-1001-widgets", "6", "task", "T1 (p6 T1-2 implementer)", active=200, output=30000, date="2026-10-01"),
             step_row("ab-1001-widgets", "6", "task", "T2 (p6 T1-2 implementer)", active=700, output=40000, date="2026-10-01"),
             step_row("ab-1001-widgets", "all", "total", "run", wall=3600, wait=1200, output=130000, date="2026-10-01"),
@@ -149,7 +154,8 @@ class RollupTest(unittest.TestCase):
         self.assertEqual(local["csv"]["review_bmm_parsed"], [1, 0, 4])
         self.assertEqual(local["ledger_accepted"], {"BLOCKER": 0, "MAJOR": 1, "MINOR": 1})
         self.assertEqual(local["step_totals"]["wall_s"], 3600)
-        self.assertEqual(local["step_totals"]["agents"], 1)
+        self.assertEqual(local["step_totals"]["agents"], 2)
+        self.assertEqual(local["step_totals"]["effort"], "medium")
         self.assertEqual(local["failures"]["stopped_agents"], 1)
         self.assertEqual(local["failures"]["duplicate_writers"], 1)
         self.assertEqual(local["failures"]["backfilled_metrics"], 1)
@@ -216,6 +222,14 @@ class RollupTest(unittest.TestCase):
         self.assertRegex(lenses.stdout, r"security\s+2\s+2\s+2\s+2\.0M\s+40k\s+0\s+0\.00\s+2")
         failures = self.run_metrics("show", "--failures")
         self.assertIn("cwdx1, installx1", failures.stdout)
+        effort = self.run_metrics("show", "--effort")
+        self.assertEqual(effort.returncode, 0, effort.stderr)
+        # reviewer on opus at high: 20k out, 10k thinking (50%), 60s over 3 messages
+        self.assertRegex(effort.stdout, r"reviewer\s+opus-5-5\s+high\s+1\s+1\s+20k\s+6667\s+50%\s+20\.0s\s+6m40")
+        self.assertRegex(effort.stdout, r"implementer\s+sonnet-5-5\s+medium\s+1\s+1\s+70k")
+        self.assertRegex(effort.stdout, r"task\s+sonnet-5-5\s+medium\s+2")
+        self.assertIn("p7 correctness/testing review", one.stdout)
+        self.assertRegex(one.stdout, r"opus-5-5\s+high")
         missing = subprocess.run(["python3", str(SCRIPT), "show", "--home", str(Path(self.temporary.name) / "nope")],
                                  env=self.env, text=True, capture_output=True)
         self.assertNotEqual(missing.returncode, 0)
