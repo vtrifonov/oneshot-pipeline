@@ -15,7 +15,8 @@ green and no review threads are left open. It never merges for you.
 ## Why use it
 
 - **One check-in.** It asks you about the design once, at the brainstorm step. Expert subagents
-  answer the other questions, so the run doesn't wait on you.
+  answer the other questions, so the run doesn't wait on you. The only other asks are run options
+  you didn't name (asked together at setup) and a PR that would exceed the size budget.
 - **Review effort follows risk.** Lane triage reads the diff. Auth, persistence, concurrency,
   infra and public-contract changes get the full review panel. Small changes get the lite lane.
 - **Every finding needs a failure scenario.** A finding without a concrete scenario is MINOR,
@@ -24,6 +25,12 @@ green and no review threads are left open. It never merges for you.
   subagents. The agent that wrote something never reviews it.
 - **It costs fewer turns.** CLI helpers replace long polling and discovery loops: wait for CI,
   wait for the review, list threads, resolve them, rerun flaky jobs.
+- **PRs stay reviewable.** Pre-approval covers the PR set you agree at the brainstorm: usually one
+  PR, or one per repository, or a split when the change is large. Each PR stays within 4,000 changed
+  lines, 75 files and 200 KB of diff. A dependent PR waits until its predecessor is merged,
+  published or deployed.
+- **Every step is measured.** Time and tokens per phase, agent and task are read from the Claude
+  Code transcripts, not estimated, and roll up across runs for retros.
 - **It works in any repository.** A repository adapter reads the base branch, CI gates and review
   policy from the target project. Nothing company-specific is built in.
 
@@ -31,22 +38,22 @@ green and no review threads are left open. It never merges for you.
 
 ```mermaid
 flowchart TD
-    setup["<b>0 · Setup</b><br/>worktree · run options"] --> brainstorm{{"<b>✨ 1 · Brainstorm</b><br/>👤 your one check-in"}}
+    setup["<b>0 · Setup</b><br/>worktree · unnamed run options asked"] --> brainstorm{{"<b>✨ 1 · Brainstorm</b><br/>👤 you approve the design"}}
 
     brainstorm -- standard --> sspec["<b>2–3 · Spec + panel</b><br/>reviewers sized by risk"]
     sspec --> splan["<b>✨ 4 · Plan</b><br/>task list · TDD matrix"]
-    splan --> spanel["<b>5 · Plan panel</b><br/>full lane"]
+    splan --> spanel["<b>5 · Plan panel</b><br/>full lane only"]
     spanel --> ssdd["<b>6 · Implement</b><br/>subagent-driven TDD"]
 
     brainstorm -- quick --> qspec["<b>2–3 · Spec + panel</b><br/>≤ 2 reviewers"]
     qspec --> qplan["<b>✨ 4 · Plan</b><br/>no plan panel"]
     qplan --> qinline["<b>6 · Implement</b><br/>inline TDD"]
 
-    ssdd --> review["<b>7 · Code review</b><br/>fresh reviewer subagent"]
+    ssdd --> review["<b>7 · Code review</b><br/>fresh opus subagent · scopes per lane"]
     qinline --> review
-    review --> gates["<b>8–9 · Gates + PR</b><br/>full suite · never open red"]
+    review --> gates["<b>8–9 · Gates + PR</b><br/>full suite · size budget · never open red"]
     gates --> shepherd["<b>✨ 10 · Shepherd</b><br/>🔁 fix waves until clean"]
-    shepherd --> done(["✅ Green, merge-ready PR"])
+    shepherd --> done(["<b>✅ 11 · Done</b><br/>green, merge-ready PR · metrics logged"])
 
     classDef you fill:#0969da,stroke:#0550ae,color:#fff
     classDef quick fill:#8250df,stroke:#6639ba,color:#fff
@@ -60,18 +67,20 @@ flowchart TD
     style shepherd stroke:#d4a72c,stroke-width:4px
 ```
 
-<sub>🟦 your only check-in · 🟪 quick mode · 🟩 done · ✨ gold border = runs on <code>fable</code>, or on <code>opus</code> in no-fable mode</sub>
+<sub>🟦 your design check-in · 🟪 quick mode · 🟩 done · ✨ gold border = runs on <code>fable</code>, or on <code>opus</code> in no-fable mode</sub>
 
 | Phase | What happens |
 |---|---|
-| 0 Setup | Reads the base branch, CI gates and risks for the repo, then creates a fresh worktree and branch |
-| 1 Brainstorm | A design agent drafts questions and options. You approve the design. The lane (full or lite) and the PR size are estimated |
-| 2–5 Spec & Plan | Spec and plan are written, then checked by independent reviewer panels. Accepted findings go back to the agent that wrote the document |
+| 0 Setup | Reads the base branch, CI gates and risks for the repo, creates a fresh worktree and branch, and asks once for any run option you didn't name |
+| 1 Brainstorm | A design agent drafts questions and options. You approve the design and the PR set. The lane (full or lite) and each PR's size are estimated |
+| 2–5 Spec & Plan | Spec and plan are written, then checked by independent reviewer panels. Accepted findings go back to the agent that wrote the document. On the lite lane, spec and plan share one document and one reviewer |
 | 6 Implement | Subagent-driven development, RED test first, with scoped verification after each step |
-| 7–8 Review & gates | Fresh code reviewers, the full local suite, and a lane check against the real diff |
+| 7–8 Review & gates | Fresh code reviewers, the full local suite, and a lane and size-budget check against the real diff |
 | 9 PR | Rebased once before the first push. It never opens with red checks |
 | 10 Shepherd | A fresh `pr-shepherd` agent works through each review wave: verify the claim, fix the class of bug, reply, resolve |
-| 11 Done | CI green, zero unresolved threads, and a metrics row is logged for retros |
+| 11 Done | CI green, zero unresolved threads, review approved. Step metrics and a run row are written for retros |
+
+Phases 6–11 repeat for each PR in the set, each in its own worktree.
 
 The full contract lives in [`skills/oneshot-pipeline/SKILL.md`](skills/oneshot-pipeline/SKILL.md),
 with one reference file per phase in [`reference/`](skills/oneshot-pipeline/reference/).
@@ -81,12 +90,13 @@ with one reference file per phase in [`reference/`](skills/oneshot-pipeline/refe
 | Option | Values | Effect |
 |---|---|---|
 | Mode | `standard` / `quick` | Quick caps the spec panel at two reviewers, skips the plan panel, and implements inline with TDD. Code review still runs in a fresh subagent |
-| Model set | `fable` / `no-fable` | No-fable runs the design, plan and wave-fixer roles on `opus` |
+| Model set | `fable` / `no-fable` | No-fable runs the design, plan and wave-fixer roles on `opus`. Every other role keeps its model, and each role's reasoning effort is pinned, not inherited from the session |
 | Frontend design | `on` / `off` | Offered only when the request touches UI and [frontend-design](https://github.com/anthropics/claude-plugins-official/tree/main/plugins/frontend-design) is installed. The design agent adds a UI design section (wireframes, states, copy, accessibility floor) that follows the repo's design system and carries through spec, plan and code review |
 
 Name the options when you start a run ("quick one shot", "one shot without fable", "with frontend
 design"). If you don't, the pipeline asks once and recommends a choice: risk sets the mode, your
-remaining weekly usage sets the model set, and the size of the UI change sets frontend design.
+remaining weekly usage sets the model set (`scripts/usage-budget.py`), and the size of the UI change
+sets frontend design.
 
 The frontend-design question also offers **Always for this repo** and **Never for this repo**. Those
 answers are remembered per repository on your machine, so you aren't asked again there. To reset,
@@ -117,9 +127,17 @@ tell the pipeline to forget the frontend-design setting for the repo.
 | `stall-watch` | One watchdog per subagent dispatch, keyed on an unanswered tool call in its transcript |
 | `papercut` | Logs a slowdown with class, minutes and status; `papercut report` groups them |
 | `derived-check` | Flags lockfile, migration-timestamp and generated-file drift before a push |
+| `text-guards` | Lists test suites that read the changed files as text (path literals, directory scans), which import-graph runs miss |
 | `subagent-guard.sh` | Hook, subagents only: denies deletes outside scratch paths, heredocs, inline interpreters, git reverts and raw `git worktree add` |
 | `sd-guard.sh` | Hook: denies the `sd` forms that silently no-op (multi-line, `${…}`, `\z`) |
+| `writer-guard` | Hook on `Agent` and `SendMessage`: one live agent per file a brief claims with `Sole writer: <path>` |
 | `block-full-suite.sh` | Optional hook that blocks full test-suite runs. Only the controller can override it |
+
+**Metrics.** `scripts/run-metrics.py` stamps phase boundaries during a run and, at the end, reads
+the transcripts into per-phase, per-agent and per-task rows (wall time, active time, tokens by
+model, effort, thinking, latency). `run-metrics.py rollup` joins every run into cross-run tables, and
+`run-metrics.py show` (`--lenses`, `--phases`, `--failures`, `--retro`, `--effort`) reads them. See
+[`reference/metrics-dashboard.md`](skills/oneshot-pipeline/reference/metrics-dashboard.md).
 
 ## Quick start
 
@@ -209,8 +227,10 @@ standard GitHub review and check APIs.
 and `sd-guard.sh` deny the command classes that have hung unattended runs on a permission prompt or
 silently no-op'd. `block-full-suite.sh` only acts in repositories that have a `.scoped-verification`
 file at the Git root. `writer-guard` keeps one live agent per file a brief claims with
-`Sole writer: <path>`, and stops a message that would resume a finished owner. Installing the files doesn't turn them on: registration, the `rm` ask-rule
-narrowing and the controller-only `ALLOW_FULL_SUITE=1` override are covered in
+`Sole writer: <path>`, and stops a message that would resume a finished owner.
+
+Installing the files doesn't turn them on: registration, the `rm` ask-rule narrowing and the
+controller-only `ALLOW_FULL_SUITE=1` override are covered in
 [`reference/distribution.md`](skills/oneshot-pipeline/reference/distribution.md).
 
 </details>
@@ -218,7 +238,8 @@ narrowing and the controller-only `ALLOW_FULL_SUITE=1` override are covered in
 <details>
 <summary><strong>Local and private settings</strong></summary>
 
-Logs, metrics, credentials, backups and `repository-adapter.local.md` are gitignored. Project rules
+Logs, metrics, run data, credentials, backups, `repository-adapter.local.md` and `*.local.json`
+(per-repo preferences, rollup sources) are gitignored. Project rules
 come from the target repository. Keep private details in local configuration, not in the shared skills.
 This repository contains no credentials and no private review skills.
 
@@ -251,8 +272,13 @@ files. The prerequisites above still apply.
 python3 bin/tests/oneshot-package.test.py
 python3 bin/tests/public-portability.test.py
 python3 bin/tests/repo-prefs.test.py
+python3 bin/tests/writer-guard.test.py
+bash bin/tests/text-guards.test.sh
 bash bin/tests/run.sh
 ```
+
+`run.sh` covers the PR helpers, `verify-diff`, and the hook, `wt-create`, `stall-watch`, `papercut`,
+metrics and `derived-check` suites.
 
 The tests use temporary configs and stubbed GitHub responses. They don't touch your real Claude
 config or call GitHub.
