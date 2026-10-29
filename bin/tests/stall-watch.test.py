@@ -42,11 +42,41 @@ class StallWatchTest(unittest.TestCase):
     def test_answered_tool_call_is_not_pending(self):
         old = time.time() - 900
         write_jsonl(self.jsonl, [(old, "assistant", {"type": "tool_use", "id": "t1", "name": "Bash"}),
-                                 (old + 1, "user", {"type": "tool_result", "tool_use_id": "t1"})])
+                                 (old + 1, "user", {"type": "tool_result", "tool_use_id": "t1"}),
+                                 (old + 2, "assistant", {"type": "text", "text": "done"})])
         os.utime(self.jsonl, (old, old))
         r = watch(self.session, "--threshold", "420")
         self.assertEqual(r.returncode, 3)
         self.assertIn("reason=idle", r.stdout)
+
+    def test_api_error_reply_is_idle(self):
+        old = time.time() - 900
+        write_jsonl(self.jsonl, [(old, "user", {"type": "text", "text": "go"}),
+                                 (old + 1, "assistant", {"type": "text", "text": "API Error: 401"})])
+        os.utime(self.jsonl, (old, old))
+        r = watch(self.session, "--threshold", "420")
+        self.assertEqual(r.returncode, 3)
+        self.assertIn("reason=idle", r.stdout)
+
+    def test_mid_request_not_idle_at_threshold(self):
+        old = time.time() - 900
+        write_jsonl(self.jsonl, [(old, "assistant", {"type": "tool_use", "id": "t1", "name": "Bash"}),
+                                 (old + 1, "user", {"type": "tool_result", "tool_use_id": "t1"})])
+        with open(self.jsonl, "a") as f:
+            f.write(json.dumps({"type": "attachment", "timestamp": "2026-01-01T00:00:00.000Z"}) + "\n")
+            f.write(json.dumps({"type": "api-request-blob", "message": {"role": "assistant", "content": [{"type": "text"}]}}) + "\n")
+        os.utime(self.jsonl, (old, old))
+        r = watch(self.session, "--threshold", "420")
+        self.assertEqual(r.returncode, 2, r.stdout)
+        self.assertIn("TIMEOUT", r.stdout)
+
+    def test_mid_request_past_ceiling_is_slow_request(self):
+        old = time.time() - 900
+        write_jsonl(self.jsonl, [(old, "user", {"type": "text", "text": "go"})])
+        os.utime(self.jsonl, (old, old))
+        r = watch(self.session, "--threshold", "200")
+        self.assertEqual(r.returncode, 3, r.stdout)
+        self.assertIn("STALL agent=a1 reason=slow-request age=", r.stdout)
 
     def test_fresh_agent_not_stalled(self):
         old = time.time() - 900

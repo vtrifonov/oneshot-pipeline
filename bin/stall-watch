@@ -3,7 +3,9 @@
 
 One watchdog for every dispatch. Signal: the agent's transcript, not worktree
 writes. A tool_use with no tool_result after it is the permission-prompt
-signature; a transcript that stops advancing is a dead or idle agent. Ages are
+signature; a transcript that stops advancing after an assistant reply is a
+finished or dead agent; one that stops after a user row (tool_result or
+prompt) is mid model request, given 3x the threshold before it counts. Ages are
 measured from the event itself, so a stall that began before this watcher was
 armed is reported on the first poll. Always pass --agent: without it the
 newest transcript by mtime is watched, which may belong to a finished agent.
@@ -12,7 +14,8 @@ Exits on the first event (the harness only notifies on exit); the controller re-
   exit 0  COMMIT <sha>            worktree HEAD moved from --base
   exit 2  TIMEOUT                  --max reached, nothing happened
   exit 3  STALL agent=<id> reason=unanswered-tool-call tool=<name> age=<s>
-          STALL agent=<id> reason=idle age=<s>
+          STALL agent=<id> reason=idle age=<s>           (finished or dead: last row is an assistant reply)
+          STALL agent=<id> reason=slow-request age=<s>   (one model request in flight past 3x --threshold)
           STALL agent=<id> reason=no-transcript age=<s>   (no transcript appeared within --threshold)
   exit 64 usage, or <session>/subagents does not exist (wrong session dir: it is
           ${CLAUDE_CONFIG_DIR:-~/.claude}/projects/<proj>/<session-id>/)
@@ -25,6 +28,8 @@ import os
 import subprocess
 import sys
 import time
+
+SLOW_REQUEST_FACTOR = 3
 
 
 def parse_ts(s):
@@ -53,6 +58,20 @@ def pending_tool_call(path):
     if not pending:
         return None
     return max(pending.values())
+
+
+def awaiting_model(path):
+    """True when the last user/assistant row is the user's: a model response is in flight."""
+    last = None
+    with open(path, errors="replace") as f:
+        for line in f:
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            if row.get("type") in ("user", "assistant") and row.get("timestamp"):
+                last = row["type"]
+    return last == "user"
 
 
 def newest_transcript(session, agent):
@@ -102,6 +121,10 @@ def main():
                 age = now - pend[0]
                 if age >= a.threshold:
                     print(f"STALL agent={agent} reason=unanswered-tool-call tool={pend[1]} age={int(age)} transcript={path}"); sys.exit(3)
+            elif awaiting_model(path):
+                age = now - mtime
+                if age >= a.threshold * SLOW_REQUEST_FACTOR:
+                    print(f"STALL agent={agent} reason=slow-request age={int(age)} transcript={path}"); sys.exit(3)
             else:
                 age = now - mtime
                 if age >= a.threshold:
