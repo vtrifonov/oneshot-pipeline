@@ -8,9 +8,11 @@ running, or resumed a finished owner with SendMessage after a fresh agent took o
   Agent        denied when a live subagent of this session claims the same path.
                `writer-guard: takeover` in the prompt overrides it (the owner was
                TaskStopped or is stuck on a prompt nobody will answer).
-  SendMessage  denied when the recipient claims a path and has finished its turn:
-               a message resumes it as a writer. `writer-guard: resume` in the
-               message overrides it (the agent died on an API/auth error).
+  SendMessage  denied when the recipient claims a path, running or finished: an owner
+               can finish between the decision and the send, and the message then
+               resumes it as a writer. `writer-guard: question` overrides it (a design
+               agent's answer is needed now); `writer-guard: resume` too (the agent
+               died on an API/auth error).
 
 Live = its last assistant turn did not end, or a message arrived after it ended,
 and the transcript moved in the last STALE_S seconds. Exit 2 denies; stderr says why.
@@ -111,21 +113,23 @@ def main():
             clash = wanted & a["paths"]
             if clash and not a["finished"] and not a["stale"]:
                 deny(f"{a['name']} is still running and owns {', '.join(sorted(clash))}. "
-                     "Wait for its report and dispatch the follow-up after it, or send the change to it "
-                     "(SendMessage), never both. If it was TaskStopped or is stuck on an unanswered prompt, "
+                     "Append `pending-change: <file> <one line>` to the run's timeline and dispatch the "
+                     "follow-up after its report. If it was TaskStopped or is stuck on an unanswered prompt, "
                      "add the line `writer-guard: takeover` to the new brief.")
     elif tool == "SendMessage":
         to = inp.get("to") or ""
         message = inp.get("message")
         text = message if isinstance(message, str) else json.dumps(message or "")
-        if "writer-guard: resume" in text:
+        if "writer-guard: resume" in text or "writer-guard: question" in text:
             return
         for a in agents(session_dir):
-            if to in a["names"] and a["paths"] and a["finished"]:
-                deny(f"{a['name']} has finished and owns {', '.join(sorted(a['paths']))}; a message resumes it "
-                     "as a writer, possibly beside a newer owner. Dispatch a fresh agent with the full brief "
-                     "instead. To resume an agent that died on an API/auth error, put `writer-guard: resume` "
-                     "in the message.")
+            if to in a["names"] and a["paths"]:
+                deny(f"{a['name']} owns {', '.join(sorted(a['paths']))}; a message can land after its turn ends "
+                     "and resume it as a writer beside a newer owner. Hold the change: append "
+                     "`pending-change: <file> <one line>` to the run's timeline. Dispatch a fresh agent with the "
+                     "full brief after the owner reports. To ask a running design agent a question whose answer "
+                     "is needed now, put `writer-guard: question` in the message; to resume an agent that died "
+                     "on an API/auth error, put `writer-guard: resume`.")
 
 
 if __name__ == "__main__":

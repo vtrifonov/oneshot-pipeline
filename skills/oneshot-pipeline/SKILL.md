@@ -139,12 +139,12 @@ Controller disposition: validate premises and deduplicate first; mark accepted/r
 
 ## Sole writer — one live agent per deliverable file
 
-Every author, reviser, implementer and fixer brief names each file it owns on its own line: `Sole writer: <absolute path>`. The `writer-guard` hook (`reference/distribution.md` § Hooks) reads those lines and denies a dispatch that claims a file a live agent of the session already claims, and a `SendMessage` that would resume a finished owner.
+Every author, reviser, implementer and fixer brief names each file it owns on its own line: `Sole writer: <absolute path>`. The `writer-guard` hook (`reference/distribution.md` § Hooks) reads those lines and denies a dispatch that claims a file a live agent of the session already claims, and every `SendMessage` to an owner, running or finished: an owner can finish between the decision and the send, and the message then resumes it beside a newer owner.
 
 - **A scope change while the owner runs: hold it.** Append it to `/tmp/<slug>/timeline.txt` as `pending-change: <file> <one line>` and dispatch it as a fresh revision after the owner reports. Do not message the owner and then dispatch a reviser: a message can land minutes later, and the owner then writes beside the reviser (a stopped duplicate cost 2.4M tokens on 2026-10-26).
-- **Message the running owner only when its answer is needed now** (a design-agent question round, Phase 1). Then wait for its report; never dispatch a second agent on that file in the meantime.
+- **Message the running owner only when its answer is needed now** (a design-agent question round, Phase 1), with the line `writer-guard: question` in the message. Then wait for its report; never dispatch a second agent on that file in the meantime.
 - **After the owner reports, never message it new work.** Dispatch a fresh agent with the full brief.
-- Overrides are for the stated cases only: `writer-guard: takeover` in a brief when the owner was TaskStopped or is stuck on an unanswerable prompt; `writer-guard: resume` in a message when the owner died on an API/auth error with uncommitted state.
+- Overrides are for the stated cases only: `writer-guard: takeover` in a brief when the owner was TaskStopped or is stuck on an unanswerable prompt; `writer-guard: question` in a message for the Phase 1 question round above; `writer-guard: resume` in a message when the owner died on an API/auth error with uncommitted state.
 
 ## Step metrics — time and tokens for every phase, agent and inline step
 

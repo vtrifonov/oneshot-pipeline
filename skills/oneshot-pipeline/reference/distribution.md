@@ -69,7 +69,7 @@ Register `subagent-guard.sh` for the Monitor tool as well, in its own entry: the
 {"matcher": "Monitor", "hooks": [{"type": "command", "command": "bash \"$HOME/.claude/hooks/subagent-guard.sh\""}]}
 ```
 
-`writer-guard` (python3) enforces SKILL.md § Sole writer. It denies an `Agent` dispatch whose brief claims a file (`Sole writer: <path>`) that a live subagent of the session already claims, and a `SendMessage` that would resume a finished owner. Briefs without a claim pass untouched. Overrides: `writer-guard: takeover` in a brief (the owner was TaskStopped or is stuck), `writer-guard: resume` in a message (the owner died on an API/auth error).
+`writer-guard` (python3) enforces SKILL.md § Sole writer. It denies an `Agent` dispatch whose brief claims a file (`Sole writer: <path>`) that a live subagent of the session already claims, and every `SendMessage` to an agent that owns a claimed file, running or finished (an owner can finish between the decision and the send, and the message then resumes it beside a fresh dispatch). Briefs without a claim, and messages to agents that own no file, pass untouched. Overrides: `writer-guard: takeover` in a brief (the owner was TaskStopped or is stuck), `writer-guard: question` in a message (a Phase 1 design-agent question round), `writer-guard: resume` in a message (the owner died on an API/auth error).
 
 ```json
 {"matcher": "Agent|SendMessage", "hooks": [{"type": "command", "command": "\"$HOME/.claude/hooks/writer-guard\""}]}

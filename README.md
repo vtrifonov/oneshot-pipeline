@@ -227,7 +227,8 @@ standard GitHub review and check APIs.
 and `sd-guard.sh` deny the command classes that have hung unattended runs on a permission prompt or
 silently no-op'd. `block-full-suite.sh` only acts in repositories that have a `.scoped-verification`
 file at the Git root. `writer-guard` keeps one live agent per file a brief claims with
-`Sole writer: <path>`, and stops a message that would resume a finished owner.
+`Sole writer: <path>`, and stops any message to an owner unless it carries a `writer-guard: question`
+or `writer-guard: resume` line.
 
 Installing the files doesn't turn them on: registration, the `rm` ask-rule narrowing and the
 controller-only `ALLOW_FULL_SUITE=1` override are covered in

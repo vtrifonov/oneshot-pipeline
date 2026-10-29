@@ -96,11 +96,19 @@ class WriterGuardTest(unittest.TestCase):
         self.assertEqual(r.returncode, 2)
         self.assertIn("Dispatch a fresh agent", r.stderr)
 
-    def test_message_resume_override_and_running_owner_allowed(self):
+    def test_message_to_running_owner_denied(self):
+        self.running_owner()
+        r = self.run_hook("SendMessage", {"to": "spec-1", "message": "also add X"})
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("pending-change:", r.stderr)
+        self.assertIn("writer-guard: question", r.stderr)
+
+    def test_message_resume_and_question_overrides_allowed(self):
         self.finished_owner()
         self.assertEqual(self.run_hook("SendMessage", {"to": "spec-1", "message": "writer-guard: resume"}).returncode, 0)
         self.running_owner()
-        self.assertEqual(self.run_hook("SendMessage", {"to": "spec-1", "message": "also add X"}).returncode, 0)
+        question = "writer-guard: question\nWhich of the two layouts do you want?"
+        self.assertEqual(self.run_hook("SendMessage", {"to": "spec-1", "message": question}).returncode, 0)
 
     def test_message_to_non_owner_allowed(self):
         self.agent("r1", "reviewer", [row("user", "Review it."), row("assistant", [{"type": "text"}], "end_turn")])
