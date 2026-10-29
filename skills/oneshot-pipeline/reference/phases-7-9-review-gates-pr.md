@@ -16,7 +16,7 @@
 
 ### 9. PR
 - Sync with the adapter's latest remote base. Rebase before first push; after publication merge the base in when needed, never amend or force-push.
-- Push and create the one authorized PR against the resolved base. Body includes spec/plan links, lane and matching triggers, mode, impl_mode, validation and Parked (MINOR) rationale. Record pr_open in timeline.txt.
+- Push and create this PR of the authorized PR set (SKILL.md § Multi-PR runs) against its resolved base. A dependent PR pushes only after its gate holds. Body includes spec/plan links, lane and matching triggers, mode, impl_mode, validation and Parked (MINOR) rationale, and, when the set has more than one PR, its siblings with their order and gates. Record pr_open with the PR index in timeline.txt.
 - Diagrams use Mermaid fences. Check the actual PR body before create/edit.
 - Batch pushes, never delay triaged work: implement, test and commit each accepted fix immediately, then push one coherent wave.
 - A flaky check gets a bounded rerun through rerun-failed, never a source commit to retrigger CI. Do not treat a failed rerun as success.
