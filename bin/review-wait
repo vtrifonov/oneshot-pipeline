@@ -14,10 +14,14 @@
 #           skipReason from the run log (pr_too_large means nothing was
 #           reviewed), unresolved thread count, bot login, and every non-approval
 #           review the bot posted on this head (findings can live in a review BODY
-#           with no thread — see pr-threads --reviews)
+#           with no thread — see pr-threads --reviews); thread_authors= names who
+#           opened the unresolved threads
 #   exit 1  a CI check failed or was cancelled (named on stdout)
 #   exit 2  --max reached (default 240s; use bounded continuation and call again)
 #   exit 3  branch is CONFLICTING (no check suite will ever appear)
+#   exit 4  before any bot verdict, unresolved threads rose above the count at
+#           start (any reviewer, e.g. a Codex connector): THREADS head=<sha>
+#           unresolved=<k> authors=<a,b>. Handle like a finished review (pr-threads).
 #
 # No checks are excluded by default; CI_EXCLUDE_CHECKS explicitly configures non-gating checks.
 
@@ -29,7 +33,7 @@ while [ $# -gt 0 ]; do
         --max|--timeout) MAX="$2"; shift 2 ;;
         --interval) INTERVAL="$2"; shift 2 ;;
         --repo) REPO="$2"; shift 2 ;;
-        -h|--help) sed -n '2,21p' "$0"; exit 0 ;;
+        -h|--help) sed -n '2,26p' "$0"; exit 0 ;;
         -*) echo "review-wait: unknown flag $1" >&2; exit 64 ;;
         *) PR="$1"; shift ;;
     esac
@@ -42,19 +46,10 @@ REPO=$(resolve_pr_repo review-wait "$PR" "$REPO") || exit 64
 BOT=${AI_REVIEW_BOT:-}   # optional: when unset, the login of the newest review carrying an ai-review: marker on the head
 EXCLUDE=${CI_EXCLUDE_CHECKS:-'^$'}
 
-unresolved_count() { # paginated: GitHub caps reviewThreads at 100 per page and never warns
-    local cursor="" after="" page n=0
-    while :; do
-        [ -n "$cursor" ] && after=", after: \"$cursor\""
-        page=$(gh api graphql -f query="
-        query { repository(owner: \"${REPO%/*}\", name: \"${REPO#*/}\") { pullRequest(number: $PR) {
-          reviewThreads(first: 100$after) { pageInfo { hasNextPage endCursor } nodes { isResolved } } } } }" 2>/dev/null) || { echo "?"; return; }
-        n=$(( n + $(printf '%s' "$page" | jq -r '[.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved==false)] | length') ))
-        [ "$(printf '%s' "$page" | jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage')" = "true" ] || break
-        cursor=$(printf '%s' "$page" | jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.endCursor')
-    done
-    echo "$n"
-}
+# shellcheck source=lib/unresolved-threads.sh
+. "$(dirname "$(readlink -f "$0")")/lib/unresolved-threads.sh"
+# Baseline for exit 4: threads already open at start are the caller's to handle, not news.
+baseline=$(unresolved_count "$REPO" "$PR")
 
 skip_reason() { # <engine review body> -> skipReason value from the review JOB log (null = a real review happened), or "unknown"
     local run_id job_id v
@@ -110,8 +105,15 @@ while :; do
         # Context lines first; the machine-readable REVIEW DONE line is always the LAST line of output.
         printf '%s\n' "$reviews" | jq -r 'select(.body | test("ai-review:approval") | not) | "--- bot review \(.state) \(.submitted_at) (\(.body | gsub("<details>(.|\n)*?</details>"; "") | gsub("\n+"; " ") | .[0:400]))"'
         [ "$size_gate" = 1 ] && echo "SIZE GATE: withheld with skipReason=pr_too_large — nothing was reviewed; terminal (ping the owner), do not re-request"
-        echo "REVIEW DONE head=$head decision=$decision approval=$verdict skipReason=$reason size_gate=$size_gate unresolved_threads=$(unresolved_count) reviewDecision=$(gh pr view "$PR" --repo "$REPO" --json reviewDecision --jq .reviewDecision 2>/dev/null) bot=$bot"
+        summary=$(unresolved_summary "$REPO" "$PR")
+        echo "REVIEW DONE head=$head decision=$decision approval=$verdict skipReason=$reason size_gate=$size_gate unresolved_threads=${summary%% *} reviewDecision=$(gh pr view "$PR" --repo "$REPO" --json reviewDecision --jq .reviewDecision 2>/dev/null) bot=$bot thread_authors=${summary#* }"
         exit 0
+    fi
+    # No verdict yet: a thread from any reviewer that appeared since the start ends the wait.
+    summary=$(unresolved_summary "$REPO" "$PR"); now=${summary%% *}; authors=${summary#* }
+    if [ "$now" != "?" ] && [ "$baseline" != "?" ] && [ "$now" -gt "$baseline" ] && [ "$authors" != "${bot%\[bot\]}" ]; then
+        echo "THREADS head=$head unresolved=$now authors=$authors"
+        exit 4
     fi
     if [ $(( $(date +%s) - start )) -ge "$MAX" ]; then
         echo "TIMEOUT after ${MAX}s head=$head — no bot verdict on this head yet (bot=${bot:-unknown}; set AI_REVIEW_BOT to force a login, or check: gh api repos/$REPO/pulls/$PR/reviews --jq '.[].user.login'); call review-wait again"

@@ -1,0 +1,51 @@
+#!/bin/bash
+# thread-watch [--interval S] [--max S] [--repo owner/name] <pr>...
+#
+# Blocks until any of the given PRs has an unresolved review thread from ANY
+# reviewer (a Codex connector, a human, the AI bot), or one becomes CONFLICTING.
+# review-wait only waits for the AI bot's verdict, so threads from other
+# reviewers, or threads that arrive after a verdict, go unnoticed. Arm this in
+# the background on every open PR of a set.
+#
+#   exit 0  THREADS pr=<n> unresolved=<k> authors=<a,b>
+#   exit 2  --max reached (default: none, waits forever)
+#   exit 3  CONFLICTING pr=<n> (no CI will start until the base is merged in)
+#   exit 64 usage error or PR not found in the repo
+#
+# Threads already open when you start count: run pr-threads first if you only
+# want news. Poll default 60s.
+
+set -o pipefail
+
+PRS=(); MAX=""; INTERVAL=60; REPO=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --max) MAX="$2"; shift 2 ;;
+        --interval) INTERVAL="$2"; shift 2 ;;
+        --repo) REPO="$2"; shift 2 ;;
+        -h|--help) sed -n '2,16p' "$0"; exit 0 ;;
+        -*) echo "thread-watch: unknown flag $1" >&2; exit 64 ;;
+        *) PRS+=("$1"); shift ;;
+    esac
+done
+[ "${#PRS[@]}" = 0 ] && { echo "usage: thread-watch [--interval S] [--max S] [--repo owner/name] <pr>..." >&2; exit 64; }
+here=$(dirname "$(readlink -f "$0")")
+# shellcheck source=lib/resolve-pr-repo.sh
+. "$here/lib/resolve-pr-repo.sh"
+# shellcheck source=lib/unresolved-threads.sh
+. "$here/lib/unresolved-threads.sh"
+for pr in "${PRS[@]}"; do
+    REPO=$(resolve_pr_repo thread-watch "$pr" "$REPO") || exit 64
+done
+
+start=$(date +%s)
+while :; do
+    for pr in "${PRS[@]}"; do
+        mstate=$(gh pr view "$pr" --repo "$REPO" --json mergeable --jq .mergeable 2>/dev/null)
+        if [ "$mstate" = "CONFLICTING" ]; then echo "CONFLICTING pr=$pr"; exit 3; fi
+        summary=$(unresolved_summary "$REPO" "$pr"); n=${summary%% *}
+        if [ "$n" != "?" ] && [ "$n" -gt 0 ]; then echo "THREADS pr=$pr unresolved=$n authors=${summary#* }"; exit 0; fi
+    done
+    if [ -n "$MAX" ] && [ $(( $(date +%s) - start )) -ge "$MAX" ]; then echo "TIMEOUT after ${MAX}s prs=${PRS[*]} no unresolved threads"; exit 2; fi
+    sleep "$INTERVAL"
+done

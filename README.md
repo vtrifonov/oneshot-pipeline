@@ -118,6 +118,7 @@ tell the pipeline to forget the frontend-design setting for the repo.
 |---|---|
 | `ci-wait` | Blocks until checks settle, or until a configured review check passes |
 | `review-wait` | Blocks until the AI reviewer posts any APPROVED or CHANGES_REQUESTED review on the current head |
+| `thread-watch` | Blocks until any reviewer (not just the AI bot) leaves an unresolved thread on one or more PRs, or a PR becomes CONFLICTING |
 | `audit-wait` | Waits for bot audits of threads closed by the author; `--trigger` posts the one `/ai-review` comment a no-push close needs |
 | `pr-threads` | Lists every unresolved thread with the code excerpt and related tests, in one call |
 | `pr-thread-close` | Replies, resolves, and confirms a thread is closed, in one call |
@@ -213,7 +214,8 @@ The PR helpers read `owner/name` from the current checkout or from `--repo`.
 | `AI_REVIEW_JOB` | `review-wait` | Regex for the bot's job name, if needed |
 
 `review-wait` returns when the AI reviewer has posted any APPROVED or CHANGES_REQUESTED review on
-the PR's current head. `audit-wait` waits for `ai-review:author-resolve-audit` replies after a
+the PR's current head, or exits 4 if unresolved threads from any reviewer appear before that
+verdict. `audit-wait` waits for `ai-review:author-resolve-audit` replies after a
 thread is closed; pass `--trigger` after a close that had no push so it posts the one `/ai-review`
 comment the bot needs. No bot identity is built in. With other reviewers, the pipeline uses the
 standard GitHub review and check APIs.

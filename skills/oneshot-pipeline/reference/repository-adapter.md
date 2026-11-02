@@ -15,7 +15,7 @@ Read at Phase 0. Resolve settings from explicit user instructions, repository AG
 | Durable artifacts | Default: docs/superpowers/reviews/<slug>/ in the worktree; ledger and per-pass metrics contain summaries and source references, never private transcripts or customer data. |
 | Scoped verification | verify-diff supports TypeScript/JavaScript projects using tsc, oxlint or eslint (picked from the repo config) and vitest; it prints what the push gate still owns. Other toolchains use equivalent scoped commands from CI. |
 | GitHub integration | Resolve owner/name from the current checkout or --repo. ci-wait, pr-threads and pr-thread-close work through authenticated gh. |
-| Optional bot protocol | review-wait returns on any APPROVED/CHANGES_REQUESTED review by the AI reviewer on the current head; it finds the reviewer from an ai-review: marker, or AI_REVIEW_BOT forces a login. audit-wait --trigger posts one /ai-review comment when a close had no push. Use native review APIs when these protocols are absent. |
+| Optional bot protocol | review-wait returns on any APPROVED/CHANGES_REQUESTED review by the AI reviewer on the current head; it finds the reviewer from an ai-review: marker, or AI_REVIEW_BOT forces a login. review-wait exits 4 when threads from any reviewer appear before the bot decides; thread-watch waits for threads from any reviewer on one or more PRs. audit-wait --trigger posts one /ai-review comment when a close had no push. Use native review APIs when these protocols are absent. |
 | Optional hook | block-full-suite.sh applies only to repositories opting in with a .scoped-verification marker at their root. Registration is per user. |
 
 Standing questions, where applicable:

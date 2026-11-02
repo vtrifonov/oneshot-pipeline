@@ -3,7 +3,7 @@ export const meta = {
   description: 'Drive an open repository PR through AI-review waves: wait for the reviewer decision, classify findings, fix BLOCKER/MAJOR, comment MINOR, one push per wave, until merge-ready',
   whenToUse: 'oneshot-pipeline Phase 10 when the controller opts for the deterministic loop instead of hand-dispatching a fixer per wave',
   phases: [
-    { title: 'Wait', detail: 'review-wait until the bot decides on the head or CI fails' },
+    { title: 'Wait', detail: 'review-wait until the bot decides on the head, any reviewer opens threads, or CI fails' },
     { title: 'Classify', detail: 'pr-threads --reviews, verify each claim, assign severity' },
     { title: 'Fix', detail: 'pr-shepherd: fix the wave, one push, close threads, report' },
   ],
@@ -31,7 +31,7 @@ const CMD_RULES = `Command rules: every Bash call starts with "cd ${WT}; " (that
 const WAIT_SCHEMA = {
   type: 'object',
   properties: {
-    state: { type: 'string', enum: ['review_done', 'ci_failed', 'pending'] },
+    state: { type: 'string', enum: ['review_done', 'ci_failed', 'pending', 'threads'] },
     head: { type: 'string' },
     decision: { type: 'string' },
     approval: { type: 'string', enum: ['approved', 'withheld', 'unknown'] },
@@ -104,6 +104,7 @@ function waitPrompt(w, attempt) {
 cd ${WT}; ~/.claude/bin/review-wait ${PR} --max 240
 Then return the result as structured output. The script's LAST line is the verdict line; earlier lines are progress and context and are ignored. Put that last line verbatim in lastLine and map it:
 - "REVIEW DONE head=<sha> decision=<X> approval=<approved|withheld> skipReason=<Y> size_gate=<0|1> unresolved_threads=<N> reviewDecision=<Z>" -> state review_done; copy each field (sizeGate true iff size_gate=1; unresolvedThreads is the string after unresolved_threads=).
+- "THREADS head=<sha> unresolved=<N> authors=<a,b>" (exit 4: a reviewer opened threads before the bot decided; this is work to handle, not a failure) -> state threads, head from the line, unresolvedThreads = the N, approval unknown, sizeGate false.
 - "FAILED head=<sha>:" followed by indented check names -> state ci_failed, those names in failedChecks, approval unknown, sizeGate false.
 - "TIMEOUT ..." -> state pending, approval unknown, sizeGate false.
 - The Bash call was killed, timed out, or its last line is none of the above -> state pending, approval unknown, sizeGate false, lastLine = the last line you saw. Never guess review_done.
@@ -136,6 +137,8 @@ const AUDIT_SCHEMA = {
 function classifyPrompt(w, wait, parkedIds) {
   const ci = wait.state === 'ci_failed'
     ? `CI FAILED on head ${wait.head} AFTER one rerun of the failed jobs, so this is not a flake: checks ${JSON.stringify(wait.failedChecks || [])}. For each failed check run "cd ${WT}; gh run list --commit ${wait.head} --json databaseId,name,conclusion --limit 20" then "cd ${WT}; gh run view <id> --log-failed" (300000 ms timeout) and extract the failing test/file and the first error lines. Each failed check becomes one item of kind ci_failure; derive its severity from the contract like any other finding (a real failing assertion on changed code is MAJOR; an infrastructure error such as a capacity or runner message is MINOR with the log line as rationale).`
+    : wait.state === 'threads'
+    ? `A reviewer opened unresolved threads on head ${wait.head} before the bot decided (review-wait exit 4); the bot has not decided yet.`
     : `Reviewer decided on head ${wait.head}: decision=${wait.decision} approval=${wait.approval} skipReason=${wait.skipReason}.`
   const parked = parkedIds.length ? `First-comment ids already parked or reopened in earlier waves — EXCLUDE them from items entirely, do not re-verify them: ${JSON.stringify(parkedIds)}. Report in parkedStillOpen how many of these ids appear among the UNRESOLVED thread sections of the pr-threads output (their "comment <id>" header numbers).` : 'No ids are parked yet; parkedStillOpen is 0.'
   return `You are a read-only triage agent for PR #${PR} in worktree ${WT}. Do not edit any file, do not commit, do not push.
@@ -209,7 +212,7 @@ for (let w = 1; w <= MAX_WAVES; w++) {
   const minors = items.filter(i => i.severity === 'MINOR')
   log(`wave ${w}: ${items.length} items — ${blockers.length} BLOCKER, ${majors.length} MAJOR, ${minors.length} MINOR; review-body ${cls.reviewBodyFindings || 0}; unresolved ${cls.unresolvedThreads}; parked so far ${parkedIds.length}`)
 
-  if (items.length === 0 && wait.state === 'review_done') {
+  if (items.length === 0 && (wait.state === 'review_done' || wait.state === 'threads')) {
     // Merge-ready needs all three: nothing to fix, GitHub reports zero unresolved threads, and the decision is APPROVED.
     if (cls.unresolvedThreads === 0 && wait.decision === 'APPROVED' && wait.reviewDecision === 'APPROVED') return { status: 'merge_ready', pr: PR, head, decision: wait.decision, waves }
     // Compare against parked threads that are STILL open in this wave's list, not the cumulative array.

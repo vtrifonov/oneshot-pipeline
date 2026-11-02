@@ -32,7 +32,7 @@ def package(output):
         (support / "bin").mkdir()
         shutil.copy2(repo / "agents/pr-shepherd.md", support / "agents/pr-shepherd.md")
         for name in ("verify-diff", "review-wait", "pr-threads", "audit-wait",
-                     "rerun-failed", "pr-thread-close", "ci-wait"):
+                     "rerun-failed", "pr-thread-close", "ci-wait", "thread-watch"):
             shutil.copy2(repo / "bin" / name, support / "bin" / name)
         shutil.copytree(repo / "bin/lib", support / "bin/lib")
         (support / "hooks").mkdir()
