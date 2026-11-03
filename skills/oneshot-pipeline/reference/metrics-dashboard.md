@@ -13,7 +13,7 @@ mtime):
 | File | One row per | Joined from |
 |---|---|---|
 | `runs.json` | run | `runs/<folder>/run-summary.json`, the `metrics.csv` row (by PR number, else by Jira key in the run id), step totals, the ledger's accepted B/M/m, `metrics_quality_notes` failure classes, papercuts on the same date and project |
-| `steps.json` | step-metrics row (phase, controller, inline, agent, task, total) | `runs/<folder>/step-metrics.json`, else that run's rows in `step-metrics.csv`; plus `run_id`, `lane`, `mode`, `date`. Rows reported since 2026-10-28 also carry `effort`, `thinking_tokens`, `thinking_s` and `latency_s` |
+| `steps.json` | step-metrics row (phase, controller, inline, agent, task, total) | `runs/<folder>/step-metrics.json`, else that run's rows in `step-metrics.csv`; plus `run_id`, `lane`, `mode`, `date`. Rows reported since 2026-10-28 also carry `effort`, `thinking_tokens`, `thinking_s` and `latency_s`; since 2026-11-03 `phase_basis` (`prefix`: the dispatch description's `pN` set the phase; `mark`: the phase mark active at the time did) |
 | `reviews.json` | reviewer pass | `review-runs.jsonl`, with `reported`/`accepted` parsed to `[B, M, m]` and `accepted_bm`; `effort` and `thinking_tokens` when the skeleton carried them |
 
 A run with artifacts in a target repository is copied into `runs/<run_id>/` first (the four
@@ -99,6 +99,12 @@ unavailable in the session; the tables are still rebuilt locally.
   overstates waiting by up to 10x; after the fix, real human wait is minutes per run unless the user
   was away.
 - Step rows before 2026-10-26 have no `task` rows; batched implementers before then are one row each.
+- Agent and task rows reported before 2026-11-03 took their phase from the mark active at dispatch, so a
+  multi-PR run that looped phases 6–10 without re-marking piled later PRs' implementers and reviews into
+  one phase (sandbox-loop-speed's "Phase 8: 5h21, 1.9M output" is PR4–PR7's Phase 6–7 work). Rows since
+  then follow the `pN` dispatch prefix (`phase_basis` = `prefix`); phase rows keep mark-based wall time.
+  Runs that shared a controller session with another run carry the other run's agents unless `report`
+  ran with `--run-key`; controller rows are never split.
 - Some per-task splits were backfilled from commit times (`metrics_quality_notes` says so).
 - `metrics.csv` B/M/m before policy `2026-09-risk-panels` are not comparable to later rows.
 - The ledger's accepted B/M/m counts every `accepted-*` disposition (`accepted-cheap`, `accepted-spec-amend`,

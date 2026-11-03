@@ -13,7 +13,7 @@ Four subcommands (rollup and show live in metrics_rollup.py):
   any mark takes --at <ISO>    to backfill a boundary (e.g. from a commit time)
 
   report <slug> [--run-id ID] [--mode M] [--lane L] [--csv PATH] [--no-csv]
-                [--artifacts DIR]
+                [--artifacts DIR] [--run-key KEY ...]
   rollup [--home DIR] [--papercuts PATH]
                                cross-run tables in <skill-dir>/runs/_rollup/ (runs, steps,
                                reviews); copies newer artifacts from the run directories
@@ -28,8 +28,18 @@ Claude Code transcripts, so nothing has to be logged by hand per agent:
   since the first mark, whose text contains "run-metrics.py mark <slug> ".
   Several match after a resume or a /clear; all count.
 - Agents: <session>/subagents/agent-*.jsonl (+ .meta.json for description,
-  agent type, spawn depth). An agent belongs to the phase active at its first
-  message.
+  agent type, spawn depth). An agent belongs to the phase its dispatch
+  description names (`p7 security review` -> phase 7; `phase_basis` = prefix),
+  else to the phase active at its first message (`phase_basis` = mark). The
+  prefix wins because a multi-PR run marks phases once and then loops 6-10
+  per PR, and the controller does not re-mark every switch. Phase rows keep
+  mark-based wall time; their tokens follow the attribution. A phase that
+  only prefixes name gets a row without wall time and a note.
+- --run-key KEY (repeatable): with keys given, an agent whose description
+  names none of them and that has no task marks is left out and listed in a
+  note. Use it when several runs shared one controller session (Jira keys,
+  PR numbers), or their agents land in each other's tables. Controller rows
+  cannot be split that way; the note says so.
 
 Only messages between the first mark and the done mark (or now) count. Usage
 is deduplicated per API message id. Tokens are split into input (uncached),
@@ -70,7 +80,7 @@ CSV_FIELDS = [
     "run_id", "date", "mode", "lane", "phase", "kind", "step", "agent_type", "model", "depth",
     "started_at", "ended_at", "wall_s", "active_s", "human_wait_s", "idle_s", "messages",
     "input", "cache_write", "cache_read", "output", "total_tokens",
-    "effort", "thinking_tokens", "thinking_s", "latency_s",
+    "effort", "thinking_tokens", "thinking_s", "latency_s", "phase_basis",
 ]
 TOKEN_KEYS = ["input", "cache_write", "cache_read", "output"]
 # Per-message extras summed like tokens: thinking tokens (already inside output), thinking
@@ -79,6 +89,8 @@ EXTRA_KEYS = ["thinking_tokens", "thinking_s", "latency_s"]
 HUMAN_GAP_S = 30
 IDLE_GAP_S = 120
 REVIEW_STEP = re.compile(r"review|recheck", re.IGNORECASE)
+# Dispatch descriptions start with the phase they belong to: "p7 security review", "p6 PR2 T3/8 implementer".
+PHASE_PREFIX = re.compile(r"^p(\d{1,2})\b")
 
 
 def now_iso():
@@ -129,7 +141,19 @@ def read_marks(slug):
     return sorted(marks, key=lambda m: m[0])
 
 
-def task_rows(base, phase, step, agent_marks, messages):
+def agent_phase(step, phase_marks, first):
+    """(phase, basis): the dispatch description's pN prefix, else the phase active at the first message."""
+    match = PHASE_PREFIX.match(step or "")
+    if match:
+        return str(int(match.group(1))), "prefix"
+    return phase_at(phase_marks, first), "mark"
+
+
+def agent_matches(step, keys):
+    return any(key.lower() in (step or "").lower() for key in keys)
+
+
+def task_rows(base, phase, step, agent_marks, messages, phase_basis="mark"):
     """Split one agent's messages at its task marks; earlier messages go to the first task."""
     out = []
     for i, (mark_ts, label) in enumerate(agent_marks):
@@ -140,10 +164,10 @@ def task_rows(base, phase, step, agent_marks, messages):
             continue
         tokens, models = summarize(inside)
         first, last = inside[0]["ts"], inside[-1]["ts"]
-        out.append(row(base, phase=phase, kind="task", step=f"{label} ({step})", agent_type="",
-                       model=fmt_model(models), depth="", started_at=iso(first), ended_at=iso(last),
-                       wall_s="", active_s=round((last - first).total_seconds()), human_wait_s="",
-                       idle_s="", messages=len(inside), tokens=tokens))
+        out.append(row(base, phase=phase, phase_basis=phase_basis, kind="task", step=f"{label} ({step})",
+                       agent_type="", model=fmt_model(models), depth="", started_at=iso(first),
+                       ended_at=iso(last), wall_s="", active_s=round((last - first).total_seconds()),
+                       human_wait_s="", idle_s="", messages=len(inside), tokens=tokens))
     return out
 
 
@@ -332,6 +356,7 @@ def gaps(events, phase_marks):
 def row(base, **fields):
     out = dict(base)
     out.update(fields)
+    out.setdefault("phase_basis", "mark")
     tokens = fields.get("tokens") or empty_tokens()
     out.pop("tokens", None)
     for key in TOKEN_KEYS:
@@ -438,41 +463,62 @@ def cmd_report(args):
                         human_wait_s=round(human[phase]), idle_s=round(idle[phase]),
                         messages=len(messages), tokens=tokens))
 
+    run_keys = args.run_key or []
+    skipped_agents = []
+    prefix_first = {}
     for agent_id, meta, messages in agents:
+        step = meta.get("description") or meta.get("name") or agent_id
+        if run_keys and not agent_matches(step, run_keys) and not task_marks.get(step):
+            skipped_agents.append(step)
+            continue
         tokens, models = summarize(messages)
         first, last = messages[0]["ts"], messages[-1]["ts"]
-        phase = phase_at(phase_marks, first)
+        phase, basis = agent_phase(step, phase_marks, first)
+        if basis == "prefix":
+            prefix_first[phase] = min(prefix_first.get(phase, first), first)
         add_tokens(phase_tokens[phase], tokens)
         phase_msgs[phase] += len(messages)
-        step = meta.get("description") or meta.get("name") or agent_id
-        rows.append(row(base, phase=phase, kind="agent", step=step,
+        rows.append(row(base, phase=phase, phase_basis=basis, kind="agent", step=step,
                         agent_type=meta.get("name") or meta.get("agentType") or "",
                         model=fmt_model(models), depth=meta.get("spawnDepth", 1),
                         started_at=iso(first), ended_at=iso(last), wall_s="",
                         active_s=round((last - first).total_seconds()), human_wait_s="", idle_s="",
                         messages=len(messages), tokens=tokens))
         if task_marks.get(step):
-            rows.extend(task_rows(base, phase, step, task_marks.pop(step), messages))
+            rows.extend(task_rows(base, phase, step, task_marks.pop(step), messages, phase_basis=basis))
         if REVIEW_STEP.search(step):
             reviews.append(review_skeleton(base["run_id"], phase, step, agent_id, first, last, tokens))
     for agent in task_marks:
         notes.append(f"task marks for agent {agent!r} match no dispatch description")
+    if run_keys:
+        notes.append(f"run keys {run_keys}: controller rows are the whole session and cannot be split by key")
+        if skipped_agents:
+            notes.append(f"{len(skipped_agents)} agents named no run key and were left out: "
+                         + "; ".join(sorted(skipped_agents)))
 
     bounds = phase_marks + [(end, None)]
     seen_phases = []
     for phase_start, phase in phase_marks:
         if phase not in seen_phases:
             seen_phases.append(phase)
+    # A phase only dispatch prefixes name (no mark) still gets a row: tokens, no wall.
+    prefix_only = sorted((p for p in prefix_first if p not in seen_phases), key=lambda p: int(p))
+    seen_phases.extend(prefix_only)
     for phase in seen_phases:
         wall = sum(
             (b_end - b_start).total_seconds()
             for (b_start, p), (b_end, _) in zip(bounds, bounds[1:]) if p == phase
         )
         starts = [ts for ts, p in phase_marks if p == phase]
-        rows.append(row(base, phase=phase, kind="phase", step=f"phase {phase}", agent_type="", model="",
-                        depth="", started_at=iso(starts[0]), ended_at="", wall_s=round(wall), active_s="",
+        marked = bool(starts)
+        rows.append(row(base, phase=phase, phase_basis="mark" if marked else "prefix", kind="phase",
+                        step=f"phase {phase}", agent_type="", model="", depth="",
+                        started_at=iso(starts[0] if marked else prefix_first[phase]), ended_at="",
+                        wall_s=round(wall) if marked else "", active_s="",
                         human_wait_s=round(human[phase]), idle_s=round(idle[phase]),
                         messages=phase_msgs[phase], tokens=phase_tokens[phase]))
+    if prefix_only:
+        notes.append(f"phases named only by dispatch prefixes, never marked (no wall time): {prefix_only}")
     unphased = [p for p in phase_tokens if p not in seen_phases]
     if unphased:
         notes.append(f"tokens outside any phase mark: {unphased}")
@@ -559,6 +605,8 @@ def main():
     report.add_argument("--csv")
     report.add_argument("--no-csv", action="store_true")
     report.add_argument("--artifacts")
+    report.add_argument("--run-key", action="append", default=[],
+                        help="keep only agents whose description names one of these (repeatable)")
     metrics_rollup.add_subcommands(sub)
     args = parser.parse_args()
     if args.cmd == "mark":

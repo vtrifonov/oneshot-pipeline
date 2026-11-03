@@ -92,17 +92,53 @@ class ReportTest(unittest.TestCase):
         ])
         (agent_dir / "agent-r1.meta.json").write_text(json.dumps(
             {"description": "p7 correctness/testing review", "name": "general-purpose", "spawnDepth": 1}))
+        # No pN prefix: falls back to the phase active at its first message (6).
+        write_jsonl(agent_dir / "agent-m1.jsonl", [
+            user(f"{T0}50Z", "You migrate the fixtures"),
+            request(f"{T0}51Z", "req-m1"),
+            assistant(f"{T0}53Z", "msg-m1", "claude-sonnet-5-5", 50, 0, "medium", "req-m1", 0, sidechain=True),
+        ])
+        (agent_dir / "agent-m1.meta.json").write_text(json.dumps(
+            {"description": "(Task 2 of 2) fixture migration", "name": "general-purpose", "spawnDepth": 1}))
         self.env = {**os.environ, "CLAUDE_CONFIG_DIR": str(self.config)}
 
     def tearDown(self):
         shutil.rmtree(self.marks, ignore_errors=True)
         self.temporary.cleanup()
 
-    def report(self):
-        result = subprocess.run(["python3", str(SCRIPT), "report", self.slug, "--no-csv", "--run-id", "rm-test"],
-                                env=self.env, text=True, capture_output=True)
+    def report(self, *extra):
+        result = subprocess.run(["python3", str(SCRIPT), "report", self.slug, "--no-csv", "--run-id", "rm-test",
+                                 *extra], env=self.env, text=True, capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         return result.stdout, json.loads((self.marks / "step-metrics.json").read_text())["rows"]
+
+    def test_agents_take_their_phase_from_the_dispatch_prefix(self):
+        out, all_rows = self.report()
+        agents = {r["step"]: r for r in all_rows if r["kind"] == "agent"}
+        self.assertEqual((agents["p6 T1 implementer"]["phase"], agents["p6 T1 implementer"]["phase_basis"]),
+                         ("6", "prefix"))
+        # Dispatched while phase 6 was marked, but the prefix says 7.
+        self.assertEqual((agents["p7 correctness/testing review"]["phase"],
+                          agents["p7 correctness/testing review"]["phase_basis"]), ("7", "prefix"))
+        self.assertEqual((agents["(Task 2 of 2) fixture migration"]["phase"],
+                          agents["(Task 2 of 2) fixture migration"]["phase_basis"]), ("6", "mark"))
+        phases = {r["phase"]: r for r in all_rows if r["kind"] == "phase"}
+        self.assertEqual(phases["6"]["phase_basis"], "mark")
+        self.assertEqual(phases["6"]["wall_s"], 90)            # :20 -> done at 1:50, mark-based
+        self.assertEqual(phases["6"]["output"], 100 + 1000 + 50)  # controller + implementer + migration, not the reviewer
+        self.assertEqual((phases["7"]["phase_basis"], phases["7"]["wall_s"], phases["7"]["output"]), ("prefix", "", 800))
+        self.assertTrue(all(r["phase_basis"] == "mark" for r in all_rows if r["kind"] in ("controller", "total")))
+        skeleton = [json.loads(line) for line in (self.marks / "review-runs.skeleton.jsonl").read_text().splitlines()]
+        self.assertEqual(skeleton[0]["phase"], "7")
+        self.assertIn("note: phases named only by dispatch prefixes, never marked (no wall time): ['7']", out)
+
+    def test_run_key_filter_drops_other_runs_agents(self):
+        out, all_rows = self.report("--run-key", "T1", "--run-key", "fixture")
+        agents = sorted(r["step"] for r in all_rows if r["kind"] == "agent")
+        self.assertEqual(agents, ["(Task 2 of 2) fixture migration", "p6 T1 implementer"])
+        self.assertNotIn("7", {r["phase"] for r in all_rows})
+        self.assertIn("1 agents named no run key and were left out: p7 correctness/testing review", out)
+        self.assertIn("controller rows are the whole session", out)
 
     def test_effort_thinking_and_latency_columns(self):
         out, all_rows = self.report()
@@ -142,7 +178,7 @@ class ReportTest(unittest.TestCase):
                                  "--run-id", "rm-test"], env=self.env, text=True, capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         header = csv_path.read_text().splitlines()[0].split(",")
-        for column in ("effort", "thinking_tokens", "thinking_s", "latency_s"):
+        for column in ("effort", "thinking_tokens", "thinking_s", "latency_s", "phase_basis"):
             self.assertIn(column, header)
 
 
