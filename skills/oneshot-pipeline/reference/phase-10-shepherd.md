@@ -21,5 +21,5 @@ Before resuming, verify no live writer owns the worktree and inspect worktree st
 - Confirm any prior fixer is stopped before dispatch; never test/build concurrently with a writer in the same worktree.
 - Use native status/results and bounded watchdogs. Quiet output alone does not establish liveness.
 - Keep blocking operations within 300 seconds; longer work uses bounded asynchronous continuation.
-- Before each push remeasure the size budget. An unapproved over-budget wave commits locally, reports BLOCKED: size, and waits for the controller to obtain user approval.
+- Before each push remeasure the size budget: 2,700 changed lines as GitHub counts them (additions + deletions, `.md` review reports included), 75 files, 200 KB, base-relative. Review waves grow a PR, so a PR opened near the cap crosses it here. An unapproved over-budget wave commits locally, reports BLOCKED: size, and waits for the controller to obtain user approval.
 - Resolve routine questions through standing decisions or expert consultation; only critical non-resolvable decisions go to the user.

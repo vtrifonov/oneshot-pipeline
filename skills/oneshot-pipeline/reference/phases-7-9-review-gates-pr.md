@@ -11,7 +11,7 @@
 - If the optional scoped-verification hook is registered and the repository opted in, the controller may prefix the pre-PR full run with ALLOW_FULL_SUITE=1. Subagents use scoped checks. Keep each blocking operation within 300 seconds and use bounded background continuation for longer gates.
 - Re-evaluate all lane triggers mechanically against the committed base-relative diff. New matches upgrade the lane and add missing review coverage before push.
 - Sweep applicable repository rules: source-size limits, UI accessibility, deployment path filters, access-control invariants, documentation and rollout requirements. Resolve exact rules from the target repository.
-- Measure PR size on the same committed diff, including generated files and lockfiles: git diff --shortstat <base>...HEAD and git diff <base>...HEAD | wc -c. Over 4,000 changed lines, 75 files or 200 KB without a recorded override requires user approval of the measured size and proposed split before push. Record size and any override in timeline.txt.
+- Measure PR size on the same committed diff, the way GitHub counts it (additions + deletions, `.md` review reports, generated files and lockfiles included): git diff --shortstat <base>...HEAD and git diff <base>...HEAD | wc -c. Over 2,700 changed lines, 75 files or 200 KB without a recorded override requires user approval of the measured size and proposed split before push; the `.md`-excluded count is only a floor, never the number to report. Record size and any override in timeline.txt.
 - Fix required gate failures before pushing.
 
 ### 9. PR

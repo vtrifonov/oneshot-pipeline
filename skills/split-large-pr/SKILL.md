@@ -11,8 +11,9 @@ shared-tools checkout or a specific build system.
 
 ## 1. Measure and choose boundaries
 
-Default review budget is 75 files, 4,000 changed lines and 200 KB of diff;
-use a stricter repository limit when configured. Include generated files and
+Default review budget is 75 files, 2,700 changed lines and 200 KB of diff;
+use a stricter repository limit when configured. Count lines the way GitHub
+does (additions + deletions, `.md` files included) and include generated files and
 lockfiles. Measure base-relative files, additions/deletions and bytes from git,
 not an API result with a file-count cap. Allow headroom for review fixes.
 
