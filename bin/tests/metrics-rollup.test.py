@@ -85,6 +85,9 @@ class RollupTest(unittest.TestCase):
             {"id": "A2", "severity": "MAJOR", "disposition": "rejected"},
             {"id": "A3", "severity": "MINOR", "disposition": "accepted"},
             {"id": "S1", "severity": "BLOCKER", "disposition": "duplicate", "duplicate_of": "A1"},
+            # accepted-* variants record HOW a finding was accepted; they still count as accepted.
+            {"id": "A4", "severity": "MAJOR", "disposition": "accepted-cheap"},
+            {"id": "A5", "severity": "BLOCKER", "disposition": "accepted-spec-amend"},
         ])
         rows = [
             step_row("ab-1001-widgets", "3", "phase", "phase 3", wall=600, wait=0, output=50000, date="2026-10-01"),
@@ -152,7 +155,7 @@ class RollupTest(unittest.TestCase):
         local = runs["ab-1001-widgets"]
         self.assertEqual(local["csv"]["pr"], "41")
         self.assertEqual(local["csv"]["review_bmm_parsed"], [1, 0, 4])
-        self.assertEqual(local["ledger_accepted"], {"BLOCKER": 0, "MAJOR": 1, "MINOR": 1})
+        self.assertEqual(local["ledger_accepted"], {"BLOCKER": 1, "MAJOR": 2, "MINOR": 1})
         self.assertEqual(local["step_totals"]["wall_s"], 3600)
         self.assertEqual(local["step_totals"]["agents"], 2)
         self.assertEqual(local["step_totals"]["effort"], "medium")

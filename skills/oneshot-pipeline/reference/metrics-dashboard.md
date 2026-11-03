@@ -101,5 +101,8 @@ unavailable in the session; the tables are still rebuilt locally.
 - Step rows before 2026-10-26 have no `task` rows; batched implementers before then are one row each.
 - Some per-task splits were backfilled from commit times (`metrics_quality_notes` says so).
 - `metrics.csv` B/M/m before policy `2026-09-risk-panels` are not comparable to later rows.
+- The ledger's accepted B/M/m counts every `accepted-*` disposition (`accepted-cheap`, `accepted-spec-amend`,
+  `accepted-departure`, ...); before 2026-11-03 only the bare `accepted` counted, so older rollups
+  under-reported runs that used the variants.
 - Lens names are free text from the ledger; the same scope can appear under two spellings until the
   review-runs writer normalises them.

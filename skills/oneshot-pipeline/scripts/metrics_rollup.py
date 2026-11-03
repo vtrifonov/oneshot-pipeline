@@ -289,14 +289,18 @@ def failure_counts(notes):
 
 
 def ledger_accepted(records):
-    """Canonical accepted findings by severity: latest record per id wins."""
+    """Canonical accepted findings by severity: latest record per id wins.
+
+    Every `accepted-*` variant counts (`accepted-cheap`, `accepted-spec-amend`,
+    `accepted-departure`, ...): the suffix records how a finding was accepted, not whether.
+    """
     latest = {}
     for rec in records:
         if isinstance(rec, dict) and rec.get("id"):
             latest[rec["id"]] = rec
     counts = {"BLOCKER": 0, "MAJOR": 0, "MINOR": 0}
     for rec in latest.values():
-        if rec.get("disposition") == "accepted":
+        if str(rec.get("disposition") or "").startswith("accepted"):
             sev = str(rec.get("severity") or "").upper()
             if sev in counts:
                 counts[sev] += 1
