@@ -11,6 +11,7 @@
 *.orig
 *.tmp
 *~
+__pycache__/
 
 # Per-machine run data — every pipeline run appends to it
 metrics.csv

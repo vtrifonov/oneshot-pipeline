@@ -14,9 +14,11 @@ green and no review threads are left open. It never merges for you.
 
 ## Why use it
 
-- **One check-in.** It asks you about the design once, at the brainstorm step. Expert subagents
-  answer the other questions, so the run doesn't wait on you. The only other asks are run options
-  you didn't name (asked together at setup) and a PR that would exceed the size budget.
+- **One check-in, or none.** It asks you about the design once, at the brainstorm step. Expert
+  subagents answer the other questions, so the run doesn't wait on you. When the ticket already
+  states the behaviour, the done-when list and the out-of-scope list, you can skip the brainstorm:
+  the ticket becomes the design brief and the run has no check-in at all. The only other asks are
+  run options you didn't name (asked together at setup) and a PR that would exceed the size budget.
 - **Review effort follows risk.** Lane triage reads the diff. Auth, persistence, concurrency,
   infra and public-contract changes get the full review panel. Small changes get the lite lane.
 - **Every finding needs a failure scenario.** A finding without a concrete scenario is MINOR,
@@ -38,14 +40,17 @@ green and no review threads are left open. It never merges for you.
 
 ```mermaid
 flowchart TD
-    setup["<b>0 · Setup</b><br/>worktree · unnamed run options asked"] --> brainstorm{{"<b>✨ 1 · Brainstorm</b><br/>👤 you approve the design"}}
+    setup["<b>0 · Setup</b><br/>worktree · unnamed run options asked"] -- brainstorm --> brainstorm{{"<b>✨ 1 · Brainstorm</b><br/>👤 you approve the design"}}
+    setup -- "skip: ticket is the spec" --> ticket[["<b>1 · Ticket as brief</b><br/>no check-in · approved=ticket"]]
 
     brainstorm -- standard --> sspec["<b>2–3 · Spec + panel</b><br/>reviewers sized by risk"]
+    ticket --> sspec
     sspec --> splan["<b>✨ 4 · Plan</b><br/>task list · TDD matrix"]
     splan --> spanel["<b>5 · Plan panel</b><br/>full lane only"]
     spanel --> ssdd["<b>6 · Implement</b><br/>subagent-driven TDD"]
 
     brainstorm -- quick --> qspec["<b>2–3 · Spec + panel</b><br/>≤ 2 reviewers"]
+    ticket --> qspec
     qspec --> qplan["<b>✨ 4 · Plan</b><br/>no plan panel"]
     qplan --> qinline["<b>6 · Implement</b><br/>inline TDD"]
 
@@ -67,12 +72,12 @@ flowchart TD
     style shepherd stroke:#d4a72c,stroke-width:4px
 ```
 
-<sub>🟦 your design check-in · 🟪 quick mode · 🟩 done · ✨ gold border = runs on <code>fable</code>, or on <code>opus</code> in no-fable mode</sub>
+<sub>🟦 your design check-in (skipped when the ticket is the spec) · 🟪 quick mode · 🟩 done · ✨ gold border = runs on <code>fable</code>, or on <code>opus</code> in no-fable mode</sub>
 
 | Phase | What happens |
 |---|---|
 | 0 Setup | Reads the base branch, CI gates and risks for the repo, creates a fresh worktree and branch, and asks once for any run option you didn't name |
-| 1 Brainstorm | A design agent drafts questions and options. You approve the design and the PR set. The lane (full or lite) and each PR's size are estimated |
+| 1 Brainstorm | A design agent drafts questions and options. You approve the design and the PR set. The lane (full or lite) and each PR's size are estimated. With `brainstorm: skip`, the controller builds the design brief from the ticket instead, records the approval as `ticket`, and the spec agent lists every decision it makes beyond the ticket |
 | 2–5 Spec & Plan | Spec and plan are written, then checked by independent reviewer panels. Accepted findings go back to the agent that wrote the document. On the lite lane, spec and plan share one document and one reviewer |
 | 6 Implement | Subagent-driven development, RED test first, with scoped verification after each step |
 | 7–8 Review & gates | Fresh code reviewers, the full local suite, and a lane and size-budget check against the real diff |
@@ -91,12 +96,14 @@ with one reference file per phase in [`reference/`](skills/oneshot-pipeline/refe
 |---|---|---|
 | Mode | `standard` / `quick` | Quick caps the spec panel at two reviewers, skips the plan panel, and implements inline with TDD. Code review still runs in a fresh subagent |
 | Model set | `fable` / `no-fable` | No-fable runs the design, plan and wave-fixer roles on `opus`. Every other role keeps its model, and each role's reasoning effort is pinned, not inherited from the session |
+| Brainstorm | `full` / `skip` | Skip drops the design agent and the only blocking check-in. Recommended when the ticket states the behaviour concretely, has a done-when and an out-of-scope list, and leaves no open choice. Lane, reviewer panels and code review are unchanged: a complete ticket about a trust boundary is still full lane |
 | Frontend design | `on` / `off` | Offered only when the request touches UI and [frontend-design](https://github.com/anthropics/claude-plugins-official/tree/main/plugins/frontend-design) is installed. The design agent adds a UI design section (wireframes, states, copy, accessibility floor) that follows the repo's design system and carries through spec, plan and code review |
 
-Name the options when you start a run ("quick one shot", "one shot without fable", "with frontend
-design"). If you don't, the pipeline asks once and recommends a choice: risk sets the mode, your
-remaining weekly usage sets the model set (`scripts/usage-budget.py`), and the size of the UI change
-sets frontend design.
+Name the options when you start a run ("quick one shot", "one shot without fable", "no brainstorm",
+"with frontend design"). If you don't, the pipeline asks once and recommends a choice: risk sets the
+mode, your remaining weekly usage sets the model set (`scripts/usage-budget.py`), the completeness
+of the ticket sets the brainstorm, and the size of the UI change sets frontend design. Name all of
+them and a complete ticket runs end to end with no question at all.
 
 The frontend-design question also offers **Always for this repo** and **Never for this repo**. Those
 answers are remembered per repository on your machine, so you aren't asked again there. To reset,
@@ -137,7 +144,10 @@ tell the pipeline to forget the frontend-design setting for the repo.
 **Metrics.** `scripts/run-metrics.py` stamps phase boundaries during a run and, at the end, reads
 the transcripts into per-phase, per-agent and per-task rows (wall time, active time, tokens by
 model, effort, thinking, latency). `run-metrics.py rollup` joins every run into cross-run tables, and
-`run-metrics.py show` (`--lenses`, `--phases`, `--failures`, `--retro`, `--effort`) reads them. See
+`run-metrics.py show` (`--lenses`, `--phases`, `--failures`, `--retro`, `--effort`) reads them. At
+Done, every accepted spec and plan finding is tagged with whether a later gate (`tsc`, tests, the
+review bot) would have caught it anyway, so retros score a reviewer panel by its escape-class
+findings, not by how many findings it reported. See
 [`reference/metrics-dashboard.md`](skills/oneshot-pipeline/reference/metrics-dashboard.md).
 
 ## Quick start
