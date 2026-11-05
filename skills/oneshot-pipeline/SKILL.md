@@ -1,6 +1,6 @@
 ---
 name: oneshot-pipeline
-description: Use when the user asks to "execute as one shot", "run the playbook", "quick one shot" / "one shot, quick mode" (the reduced-review quick mode), "one shot without fable" / "no fable" (opus replaces fable everywhere), "with frontend design" / "no frontend design" (the UI design pass), or wants a feature or fix taken from idea to a merge-ready PR without repeated check-ins. Run options the user leaves unnamed (quick vs standard, fable vs no fable) are asked once up front, with a recommendation based on the requirement.
+description: Use when the user asks to "execute as one shot", "run the playbook", "quick one shot" / "one shot, quick mode" (the reduced-review quick mode), "one shot without fable" / "no fable" (opus replaces fable everywhere), "no brainstorm" / "ticket is the spec" (skip the design agent on a complete ticket), "with frontend design" / "no frontend design" (the UI design pass), or wants a feature or fix taken from idea to a merge-ready PR without repeated check-ins. Run options the user leaves unnamed (quick vs standard, fable vs no fable, brainstorm vs skip) are asked once up front, with a recommendation based on the requirement.
 ---
 
 # One-Shot Pipeline (idea → green merge-ready PR)
@@ -56,9 +56,9 @@ Trigger categories: authorization/trust boundaries; persistence shape/queries/tr
 
 ## Run options — named, or asked once with a recommendation
 
-Two run options are the user's to set: **mode** (`standard` / `quick`) and **model set** (`fable` / `no-fable`). Either can be named at invocation ("quick one shot", "one shot, quick mode", "run the playbook quick"; "without fable", "no fable", "opus only"). Whatever the invocation leaves unnamed is **asked once, at the end of Phase 0, before the brainstorm agent is dispatched** (the model set decides that agent's model). Never assume a default silently, and never re-ask an option the user named.
+Three run options are the user's to set: **mode** (`standard` / `quick`), **model set** (`fable` / `no-fable`) and **brainstorm** (`full` / `skip`). Any can be named at invocation ("quick one shot", "one shot, quick mode", "run the playbook quick"; "without fable", "no fable", "opus only"; "no brainstorm", "ticket is the spec", "skip the brainstorm"). Whatever the invocation leaves unnamed is **asked once, at the end of Phase 0, before the brainstorm agent is dispatched** (the model set decides that agent's model; the brainstorm option decides whether it is dispatched at all). Never assume a default silently, and never re-ask an option the user named.
 
-The two options are independent — all four combinations are valid (`quick+fable`, `quick+no-fable`, `standard+fable`, `standard+no-fable`). Each is recommended from its own input:
+The options are independent — every combination is valid (`quick+fable`, `quick+no-fable`, `standard+fable`, `standard+no-fable`, each with or without the brainstorm). Each is recommended from its own input:
 
 1. **Risk → mode.** Pre-triage the raw request against the lane trigger categories above (a read *before* the provisional one: the request text, the files it names, a quick look at the touched area; no design work).
    - **quick** when the request reads as lite lane: one package, no trigger category in sight, ≲300 source lines, concrete requirements (a bug with a repro, a feature mirroring an existing pattern, a config/copy change).
@@ -71,12 +71,18 @@ The two options are independent — all four combinations are valid (`quick+fabl
 
 Budget never moves the mode recommendation. Risk decides reviewer coverage, and cost is cut on the model tier first. So high risk with low budget is `standard+no-fable`, not quick.
 
-A third, conditional option — **frontend design** (`on` / `off`) — joins the same ask only when the request touches UI. See § Frontend design below.
+3. **Request completeness → brainstorm.** Read the request and the ticket it names (fetch it; never judge from the summary line).
+   - **skip** when ALL hold: the ticket states the behaviour concretely (status codes, error codes, field or event names, or the equivalent for the domain), has a done-when or acceptance list, has an out-of-scope list, and leaves no open choice in the text (no "TBD", "?", "option A or B", "to be decided"). The reporter being the user is a plus, never a requirement.
+   - **full** otherwise. A long ticket with one open choice still gets the brainstorm; the design agent exists to close exactly that.
+   - The option changes Phase 1 only. Lane triage, reviewer selection and code review follow the lane, never this option: a complete ticket about a trust boundary is still full lane.
+
+A fourth, conditional option — **frontend design** (`on` / `off`) — joins the same ask only when the request touches UI. See § Frontend design below.
 
 **How to ask:** ONE `AskUserQuestion` call with one question per unnamed option, in this order:
 1. **Mode** — "Quick mode?": `Standard` / `Quick`, recommendation first with "(Recommended)". Each description is one clause tied to *this* request (e.g. "no trust/persistence trigger, one package").
 2. **Model set** — "Use fable?": `Fable` / `No fable (opus)`, recommendation first. Put the budget line (`used_pct`, `working_days_left`, `per_day_pct`, `resets_at`) in the question text, so the user sees the numbers behind the recommendation.
-3. **Frontend design** (only when § Frontend design says to ask) — "Use frontend-design for the UI?": `Use it` / `Skip this run` / `Always for this repo` / `Never for this repo`, recommendation first.
+3. **Brainstorm** — "Run the brainstorm?": `Brainstorm` / `Skip (ticket is the spec)`, recommendation first. The description names what the ticket has or lacks (e.g. "behaviour with status codes, done-when and out-of-scope present, no open choice" or "no acceptance list; two options left open in §3").
+4. **Frontend design** (only when § Frontend design says to ask) — "Use frontend-design for the UI?": `Use it` / `Skip this run` / `Always for this repo` / `Never for this repo`, recommendation first.
 
 - **An option the invocation named** is left out of the call; never re-ask it.
 - **`fable` unavailable in the runtime:** never ask the model question; record `no-fable (unavailable)`.
@@ -87,7 +93,7 @@ If the user replies "you pick" / "go with your recommendation", or the run is di
 
 `frontend-design:frontend-design` gives the design agent an aesthetic direction, a layout plan and a UI quality floor. It is optional: never a prerequisite, never a lane trigger.
 
-**When to ask.** Ask the third question at the Phase 0 ask only when ALL of these hold:
+**When to ask.** Ask the fourth question at the Phase 0 ask only when ALL of these hold:
 1. The skill is listed among the runtime's available skills. Otherwise record `frontend_design=unavailable` and never mention it.
 2. The Phase 0 pre-triage sees a UI change: the request names or implies a screen, page, component, form, dialog, layout, styling or user-facing copy, or the touched area sits under the adapter's UI roots.
 3. The invocation did not name it ("with frontend design" / "no frontend design").
@@ -162,13 +168,13 @@ Measured, never estimated: `scripts/run-metrics.py` reads the Claude Code transc
 
 ## Model matrix
 
-Claude defaults below: pass `model` when that alias is available. Other runtimes use the adapter's available model mapping or inherit; never pass unavailable aliases. **No-fable mode (the user's choice — named at invocation or picked at the Phase 0 ask, see § Run options):** when it is on, every `fable` row below runs on `opus` instead — brainstorm, plan author/reviser and wave fixer (10a dispatch `model: opus`; 10b pass `fixModel: 'opus'` in the Workflow args). Nothing else changes: same agents, same sole-writer ownership, same phases. Like quick mode it is orthogonal to lane and mode, recommended but never self-selected, never dropped mid-run; record it by suffixing the metrics row's `mode` value with `+nofable` (`standard+nofable`, `quick+nofable`) — the 19-column schema stays fixed. Wherever a phase reference says `fable`, read "the plan/design/fixer model". **If `fable` is not available in the runtime, the brainstorm, plan and wave-fixer agents fall back to `opus`** — they stay subagents either way, because the phase structure (design brief file, one sole writer per artifact) is what makes revisions cheap, not the model alias. `fable` goes where judgment beats prose: design exploration, task decomposition, and disputing reviewer claims; it is never used on parallel panels, where tier cost multiplies.
+Claude defaults below: pass `model` when that alias is available. Other runtimes use the adapter's available model mapping or inherit; never pass unavailable aliases. **No-fable mode (the user's choice — named at invocation or picked at the Phase 0 ask, see § Run options):** when it is on, every `fable` row below runs on `opus` instead — brainstorm, plan author/reviser and wave fixer (10a dispatch `model: opus`; 10b pass `fixModel: 'opus'` in the Workflow args). Nothing else changes: same agents, same sole-writer ownership, same phases. Like quick mode it is orthogonal to lane and mode, recommended but never self-selected, never dropped mid-run; record it by suffixing the metrics row's `mode` value with `+nofable` (`standard+nofable`, `quick+nofable`) — the 19-column schema stays fixed. `brainstorm=skip` is recorded the same way, as a `+nobrainstorm` suffix (`quick+nofable+nobrainstorm`); Phase 1 still gets its `mark`, so the saving is measured rather than assumed. Wherever a phase reference says `fable`, read "the plan/design/fixer model". **If `fable` is not available in the runtime, the brainstorm, plan and wave-fixer agents fall back to `opus`** — they stay subagents either way, because the phase structure (design brief file, one sole writer per artifact) is what makes revisions cheap, not the model alias. `fable` goes where judgment beats prose: design exploration, task decomposition, and disputing reviewer claims; it is never used on parallel panels, where tier cost multiplies.
 
 **Effort is explicit on every dispatch** (`effort:` in the Agent call; `fixEffort` / `classifyEffort` in the 10b Workflow args), never inherited from the session: a session-level effort change must not silently change what the agents run at. The values below pin the measured baseline (runs to 2026-10-26: `opus`/`sonnet` agents ran at `medium`, `fable` at `high`, haiku helpers at `low`; the 2026-10-27 run ran everything at `high` after a session-settings change, which is exactly the drift this column prevents); Phase 7 code review is the one deliberate step up. Every step-metrics row records the effort it actually ran at (`run-metrics.py show --effort`), so a change here is evaluated against escaped defects (Phase 10 accepted findings) and reviewer yield, one role at a time.
 
 | Work | Model | Effort | Why |
 |---|---|---|---|
-| Brainstorm design agent (question set, options, trade-offs, agreed design + standing decisions) | `fable` | `high` | Design exploration is the highest-judgment step and the only one the user sees; the controller still owns the checkpoint conversation and relays both directions |
+| Brainstorm design agent (question set, options, trade-offs, agreed design + standing decisions); not dispatched when `brainstorm=skip` | `fable` | `high` | Design exploration is the highest-judgment step and the only one the user sees; the controller still owns the checkpoint conversation and relays both directions |
 | Spec author and reviser (first draft AND post-panel rewrites) | `opus` | `medium` | Spec prose does not need the top tier; one alias writes and revises so voice and structure stay consistent across revisions |
 | Plan author and reviser (first draft AND post-panel rewrites) | `fable` | `high` | Task decomposition, ordering and the invariant matrix are the highest-leverage reasoning in the run |
 | Controller work (orchestration, findings triage, lane calls, dispositions, gates) | inherit (session model) | session setting (recorded per phase) | Judgment on other agents' output stays on the session model |
@@ -187,7 +193,7 @@ Claude defaults below: pass `model` when that alias is available. Other runtimes
 Every phase opens with `run-metrics.py mark <slug> phase <N>` (§ Step metrics).
 
 0. **Setup** — read repository adapter; resolve base branch, worktree root, domain risks, tools, and CI gates; new worktree via `~/.claude/bin/wt-create <branch> --base <ref>`; one implementation writer per worktree; reviewers own separate findings files. Last step: **ask any unnamed run option** (mode, model set, and frontend design when the request touches UI and no repo preference is stored) in one round, recommended choice first (§ Run options, § Frontend design) — before the brainstorm dispatch.
-1. **Brainstorm** — the ONLY planned design check-in (the Phase 0 run-options ask, when needed, is the other planned touchpoint). A **`fable` design agent** drafts questions and options; the controller relays them to the user and their answers back. Collect standing decisions, state the provisional lane, agree the PR set (§ Multi-PR runs), estimate each PR's size against the size budget (Contract), and if one is over, propose the split or get the override in this same round. Then write `approved=` to `/tmp/<slug>/timeline.txt`.
+1. **Brainstorm** — the ONLY planned design check-in (the Phase 0 run-options ask, when needed, is the other planned touchpoint). A **`fable` design agent** drafts questions and options; the controller relays them to the user and their answers back. Collect standing decisions, state the provisional lane, agree the PR set (§ Multi-PR runs), estimate each PR's size against the size budget (Contract), and if one is over, propose the split or get the override in this same round. Then write `approved=` to `/tmp/<slug>/timeline.txt`. **`brainstorm=skip`:** no design agent and no question round. The controller writes `design-brief.md` from the ticket itself (text verbatim, default standing decisions, provisional lane with its trigger rows, proposed PR set and size estimate), writes `approved=ticket`, posts one status line, and goes autonomous. A PR projected over the size budget is the one thing that still asks (Contract). Details in `reference/phases-0-5-setup-to-plan.md` §1.
 2. **Spec** — an **`opus` spec agent** writes the file under `docs/superpowers/specs/`; controller confirms the lane against it.
 3. **Panel on spec** — use review policy (**quick: two reviewers max**): intent, boundaries, invariants, failure behavior. Independent findings to files; source-backed disposition in shared ledger; targeted rechecks; scoped reference reads. Controller triages; the **`opus` spec agent applies accepted BLOCKER/MAJOR rewrites**.
 4. **Plan** — a **`fable` plan agent** applies `superpowers:writing-plans`; coupled surfaces become explicit tasks, invariant matrix becomes the TDD list; under 2,000 lines or split into parts.
@@ -231,6 +237,9 @@ Every phase opens with `run-metrics.py mark <slug> phase <N>` (§ Step metrics).
 | "They didn't say, so standard + fable is the default" | Unnamed is not a default. Ask once at Phase 0, with a request-specific recommendation. |
 | "Budget is tight, so recommend quick" | Budget picks the model tier, risk picks the mode. Tight budget + risky request = `standard+no-fable`. |
 | "I'll ask about quick mode after the brainstorm" | The model set picks the brainstorm agent's model, so both options are asked before it is dispatched. |
+| "The ticket is complete, so the panel and code review can go too" | `brainstorm=skip` removes the design agent and the question round, nothing else. Lane, reviewer selection and Phase 7 follow the lane. |
+| "The ticket is long, so recommend skip" | Length is not completeness. One open choice in the text recommends the brainstorm; the design agent exists to close it. |
+| "No brainstorm, so I'll decide the PR set myself at Phase 4" | The PR set is part of the pre-approval. With `skip` the controller proposes it from the ticket in the Phase 1 status line; a later addition still needs an explicit yes. |
 | "Quick mode, so skip the spec panel too" | Quick caps the spec panel at two reviewers; it never takes it to zero. The spec is the only artifact still challenged. |
 | "Quick mode, so no plan needed" | Phase 5 is skipped, Phase 4 is not. The plan is the task list and the TDD matrix the inline implementation runs off. |
 | "Inline TDD — I'll write the code and add the test after" | The failing test first IS the trade for the skipped plan panel. Code-first forfeits it. |

@@ -307,6 +307,43 @@ def ledger_accepted(records):
     return counts
 
 
+def backfill_accepted(reviews, ledger):
+    """Fill `unique_accepted_bmm` on a review pass that lacks it, from the ledger.
+
+    Only a pass that lists `finding_ids` is backfilled: its accepted count is the
+    accepted-* findings among those ids (latest record per id). A pass without ids
+    stays unknown rather than becoming a zero. Backfilled passes carry
+    `accepted_source: "ledger"` so the lens view can say how many it filled.
+    """
+    if not ledger or not reviews:
+        return
+    latest = {}
+    for rec in ledger:
+        if isinstance(rec, dict) and rec.get("id"):
+            latest[rec["id"]] = rec
+    for rec in reviews:
+        if not isinstance(rec, dict) or rec.get("unique_accepted_bmm") not in (None, "", "null"):
+            continue
+        ids = rec.get("finding_ids") or []
+        if not ids:
+            continue
+        counts = {"BLOCKER": 0, "MAJOR": 0, "MINOR": 0}
+        known = 0
+        for fid in ids:
+            led = latest.get(fid)
+            if not led:
+                continue
+            known += 1
+            if str(led.get("disposition") or "").startswith("accepted"):
+                sev = str(led.get("severity") or "").upper()
+                if sev in counts:
+                    counts[sev] += 1
+        if not known:
+            continue
+        rec["unique_accepted_bmm"] = f"{counts['BLOCKER']}/{counts['MAJOR']}/{counts['MINOR']}"
+        rec["accepted_source"] = "ledger"
+
+
 def step_totals(rows):
     total = next((r for r in rows if r.get("kind") == "total"), None)
     agents = sum(1 for r in rows if r.get("kind") == "agent")
@@ -340,6 +377,7 @@ def build_run(run_dir, files, step_csv):
                 break
     reviews = read_jsonl(files["review-runs.jsonl"]) if "review-runs.jsonl" in files else []
     ledger = read_jsonl(files["review-ledger.jsonl"]) if "review-ledger.jsonl" in files else []
+    backfill_accepted(reviews, ledger)
     rows = steps["rows"] if steps else []
     quality_notes = list(summary.get("metrics_quality_notes") or [])
     source_marker = run_dir / ".source"
@@ -455,6 +493,7 @@ def review_row(rec, run):
         "reported": list(reported) if reported else None,
         "accepted": list(accepted) if accepted else None,
         "accepted_bm": (accepted[0] + accepted[1]) if accepted else None,
+        "accepted_source": rec.get("accepted_source") or ("pass" if accepted else None),
         "duplicate_count": to_int(rec.get("duplicate_count")),
         "rejected_count": to_int(rec.get("rejected_count")),
         "finding_ids": rec.get("finding_ids") or [],
@@ -662,15 +701,21 @@ def lens_stats(reviews):
         tokens = sum(r["tokens"] or 0 for r in passes)
         accepted = sum(r["accepted_bm"] or 0 for r in passes)
         measured = [r for r in passes if r["accepted_bm"] is not None]
+        # Numerator and denominator over the same passes: an unmeasured pass has
+        # unknown findings, so its tokens must not dilute the yield either.
+        measured_tokens = sum(r["tokens"] or 0 for r in measured)
         since_last = 0
         for rev in reversed(measured):
             if rev["accepted_bm"]:
                 break
             since_last += 1
         out.append({
-            "lens": lens, "passes": len(passes), "measured": len(measured), "tokens": tokens,
+            "lens": lens, "passes": len(passes), "measured": len(measured),
+            "unmeasured": len(passes) - len(measured),
+            "backfilled": sum(1 for r in measured if r.get("accepted_source") == "ledger"),
+            "tokens": tokens, "measured_tokens": measured_tokens,
             "output_tokens": sum(r["output_tokens"] or 0 for r in passes), "accepted_bm": accepted,
-            "bm_per_mtok": (accepted / tokens * 1_000_000) if tokens else None,
+            "bm_per_mtok": (accepted / measured_tokens * 1_000_000) if measured_tokens else None,
             "passes_since_accepted": since_last,
             "runs": len({r["run_id"] for r in passes}),
         })
@@ -679,11 +724,16 @@ def lens_stats(reviews):
 
 
 def show_lenses(tables):
-    rows = [[s["lens"][:40], s["passes"], s["measured"], s["runs"], fmt_k(s["tokens"]), fmt_k(s["output_tokens"]),
+    rows = [[s["lens"][:40], s["passes"], s["measured"], s["unmeasured"], s["backfilled"], s["runs"],
+             fmt_k(s["tokens"]), fmt_k(s["measured_tokens"]), fmt_k(s["output_tokens"]),
              s["accepted_bm"], "-" if s["bm_per_mtok"] is None else f"{s['bm_per_mtok']:.2f}",
              s["passes_since_accepted"]] for s in lens_stats(tables["reviews"])]
-    print_table(["lens", "passes", "measured", "runs", "tokens", "out", "acc B+M", "B+M/Mtok", "dry streak"], rows)
-    print("\nmeasured = passes with an accepted B/M/m count; dry streak = measured passes since the last accepted B/M")
+    print_table(["lens", "passes", "measured", "unknown", "from ledger", "runs", "tokens", "meas tok", "out",
+                 "acc B+M", "B+M/Mtok", "dry streak"], rows)
+    print("\nmeasured = passes with an accepted B/M/m count (from the pass record, or from the ledger via its "
+          "finding_ids); unknown = passes with neither, whose findings are NOT zero.\n"
+          "B+M/Mtok divides accepted B+M by the tokens of the MEASURED passes only; a lens with many unknown "
+          "passes has an unknown yield, not a low one. dry streak = measured passes since the last accepted B/M")
 
 
 def phase_rows(steps):
