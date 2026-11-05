@@ -288,16 +288,27 @@ def failure_counts(notes):
     return counts
 
 
-def ledger_accepted(records):
-    """Canonical accepted findings by severity: latest record per id wins.
+def ledger_latest(records):
+    """Latest state per finding id, MERGED across its records.
 
-    Every `accepted-*` variant counts (`accepted-cheap`, `accepted-spec-amend`,
-    `accepted-departure`, ...): the suffix records how a finding was accepted, not whether.
+    A ledger appends partial updates (`{"id": "P5-1", "status": "closed"}`), so the
+    last record alone has no severity or disposition. Each later record overrides
+    only the fields it carries.
     """
     latest = {}
     for rec in records:
         if isinstance(rec, dict) and rec.get("id"):
-            latest[rec["id"]] = rec
+            latest.setdefault(rec["id"], {}).update(rec)
+    return latest
+
+
+def ledger_accepted(records):
+    """Canonical accepted findings by severity: latest merged record per id wins.
+
+    Every `accepted-*` variant counts (`accepted-cheap`, `accepted-spec-amend`,
+    `accepted-departure`, ...): the suffix records how a finding was accepted, not whether.
+    """
+    latest = ledger_latest(records)
     counts = {"BLOCKER": 0, "MAJOR": 0, "MINOR": 0}
     for rec in latest.values():
         if str(rec.get("disposition") or "").startswith("accepted"):
@@ -317,10 +328,7 @@ def backfill_accepted(reviews, ledger):
     """
     if not ledger or not reviews:
         return
-    latest = {}
-    for rec in ledger:
-        if isinstance(rec, dict) and rec.get("id"):
-            latest[rec["id"]] = rec
+    latest = ledger_latest(ledger)
     for rec in reviews:
         if not isinstance(rec, dict) or rec.get("unique_accepted_bmm") not in (None, "", "null"):
             continue
