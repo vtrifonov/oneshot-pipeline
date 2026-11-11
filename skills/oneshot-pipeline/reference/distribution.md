@@ -44,7 +44,7 @@ For Claude/GitHub runs, confirm pr-shepherd is discovered and the required helpe
 
 ## Hooks
 
-`link.sh` places four PreToolUse hooks in ~/.claude/hooks but does not change settings.json:
+`link.sh` places five PreToolUse hooks in ~/.claude/hooks but does not change settings.json:
 
 - `subagent-guard.sh` — subagents only: denies deletes outside scratch paths, heredocs/multi-line, inline `python -c`, git reverts, raw `git worktree add`. Each denial names the alternative. This is what stops an unattended run from hanging on a permission prompt.
 - `sd-guard.sh` — all sessions: denies the `sd` forms that silently no-op (multi-line, `${…}`, `\z`); subagents get no sd.
@@ -73,6 +73,12 @@ Register `subagent-guard.sh` for the Monitor tool as well, in its own entry: the
 
 ```json
 {"matcher": "Agent|SendMessage", "hooks": [{"type": "command", "command": "\"$HOME/.claude/hooks/writer-guard\""}]}
+```
+
+`effort-guard` (python3) enforces SKILL.md § Model matrix on every `Agent` dispatch whose description starts with a phase (`p3 spec-security review`, `p6 T4-5/15 implementer`). It denies a dispatch with no `model`, with no `effort`, or with an effort other than the matrix value for that role: `high` for the Phase 1 design agent, the plan author and reviser, Phase 7 reviews and rechecks, and the Phase 10 wave fixer; `low` on `haiku`; `medium` for everything else. It also denies `opus` on a Phase 6 implementer or task reviewer, or on a Phase 7 fix round, unless the brief has a `Complexity risk: <named risk>` or `Escalated after: <failed attempt>` line. A Phase 10 wave fixer on `fable` needs `Escalated after: <wave and thread>`, since the fixer's default is `opus`. Other Agent calls pass untouched. Override: `effort-guard: override <reason>` in the brief allows a different effort or an unflagged `opus`; it never excuses a missing `model` or `effort`. Register it in the same entry as `writer-guard`, or in its own:
+
+```json
+{"matcher": "Agent", "hooks": [{"type": "command", "command": "\"$HOME/.claude/hooks/effort-guard\""}]}
 ```
 
 Also narrow any `Bash(rm *)` entry in `permissions.ask` to recursive forms (`Bash(rm -r *)`, `Bash(rm -rf *)`): an ask rule prompts even when a hook allows, and a subagent cannot answer. The hooks require jq, perl and git. Installing the files alone does not register them.

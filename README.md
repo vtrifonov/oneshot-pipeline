@@ -57,7 +57,7 @@ flowchart TD
     ssdd --> review["<b>7 · Code review</b><br/>fresh opus subagent · scopes per lane"]
     qinline --> review
     review --> gates["<b>8–9 · Gates + PR</b><br/>full suite · size budget · never open red"]
-    gates --> shepherd["<b>✨ 10 · Shepherd</b><br/>🔁 fix waves until clean"]
+    gates --> shepherd["<b>10 · Shepherd</b><br/>🔁 fix waves until clean"]
     shepherd --> done(["<b>✅ 11 · Done</b><br/>green, merge-ready PR · metrics logged"])
 
     classDef you fill:#0969da,stroke:#0550ae,color:#fff
@@ -69,7 +69,6 @@ flowchart TD
     style brainstorm stroke:#d4a72c,stroke-width:4px
     style splan stroke:#d4a72c,stroke-width:4px
     style qplan stroke:#d4a72c,stroke-width:4px
-    style shepherd stroke:#d4a72c,stroke-width:4px
 ```
 
 <sub>🟦 your design check-in (skipped when the request is already the spec) · 🟪 quick mode · 🟩 done · ✨ gold border = runs on <code>fable</code>, or on <code>opus</code> in no-fable mode</sub>
@@ -95,7 +94,7 @@ with one reference file per phase in [`reference/`](skills/oneshot-pipeline/refe
 | Option | Values | Effect |
 |---|---|---|
 | Mode | `standard` / `quick` | Quick caps the spec panel at two reviewers, skips the plan panel, and implements inline with TDD. Code review still runs in a fresh subagent |
-| Model set | `fable` / `no-fable` | No-fable runs the design, plan and wave-fixer roles on `opus`. Every other role keeps its model, and each role's reasoning effort is pinned, not inherited from the session |
+| Model set | `fable` / `no-fable` | No-fable runs the design and plan roles on `opus`, and keeps an escalated wave fixer there too (the fixer is `opus` by default and moves to `fable` only for a reopened thread). Every other role keeps its model, and each role's reasoning effort is pinned, not inherited from the session |
 | Brainstorm | `full` / `skip` | Skip drops the design agent and the only blocking check-in. Recommended when the request, whatever its source (a ticket, a linked doc or the message itself), states the behaviour concretely, has a done-when and an out-of-scope list, and leaves no open choice. Lane, reviewer panels and code review are unchanged: a complete request about a trust boundary is still full lane |
 | Frontend design | `on` / `off` | Offered only when the request touches UI and [frontend-design](https://github.com/anthropics/claude-plugins-official/tree/main/plugins/frontend-design) is installed. The design agent adds a UI design section (wireframes, states, copy, accessibility floor) that follows the repo's design system and carries through spec, plan and code review |
 
@@ -139,6 +138,7 @@ tell the pipeline to forget the frontend-design setting for the repo.
 | `subagent-guard.sh` | Hook, subagents only: denies deletes outside scratch paths, heredocs, inline interpreters, git reverts and raw `git worktree add` |
 | `sd-guard.sh` | Hook: denies the `sd` forms that silently no-op (multi-line, `${…}`, `\z`) |
 | `writer-guard` | Hook on `Agent` and `SendMessage`: one live agent per file a brief claims with `Sole writer: <path>` |
+| `effort-guard` | Hook on `Agent`: a pipeline dispatch (described `p<N> ...`) passes the model-matrix `model` and `effort`, and `opus` on a scoped code task names its risk |
 | `block-full-suite.sh` | Optional hook that blocks full test-suite runs. Only the controller can override it |
 
 **Metrics.** `scripts/run-metrics.py` stamps phase boundaries during a run and, at the end, reads
@@ -235,12 +235,14 @@ standard GitHub review and check APIs.
 <details>
 <summary><strong>Hooks</strong></summary>
 
-`link.sh` places four PreToolUse hooks in `~/.claude/hooks`. `subagent-guard.sh` (subagents only)
+`link.sh` places five PreToolUse hooks in `~/.claude/hooks`. `subagent-guard.sh` (subagents only)
 and `sd-guard.sh` deny the command classes that have hung unattended runs on a permission prompt or
 silently no-op'd. `block-full-suite.sh` only acts in repositories that have a `.scoped-verification`
 file at the Git root. `writer-guard` keeps one live agent per file a brief claims with
 `Sole writer: <path>`, and stops any message to an owner unless it carries a `writer-guard: question`
-or `writer-guard: resume` line.
+or `writer-guard: resume` line. `effort-guard` denies a pipeline dispatch whose `model` or `effort`
+is missing or differs from the model matrix, and `opus` on a Phase 6 task or a Phase 7 fix round
+without a `Complexity risk:` or `Escalated after:` line in the brief.
 
 Installing the files doesn't turn them on: registration, the `rm` ask-rule narrowing and the
 controller-only `ALLOW_FULL_SUITE=1` override are covered in

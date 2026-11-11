@@ -1,0 +1,97 @@
+#!/usr/bin/env python3
+"""PreToolUse hook (Agent): one-shot pipeline dispatches carry the model-matrix model and effort.
+
+The pipeline's dispatch descriptions start with the phase (`p3 spec-security review`,
+`p6 T4-5/15 implementer`, `p10 wave-2 fixer`). Any other Agent call passes untouched.
+
+Measured before this hook (30 runs, 2026-10-28 to 2026-11-10): the matrix pinned opus
+agents at `medium`, yet in 20 runs every opus agent ran at `high`, the session default,
+because the dispatch passed no `effort`. Roles with no matrix row passed no `model` and
+ran on the session tier. Opus took 38% of implementer dispatches against a 20% flag cap.
+
+A `p<N>` dispatch is denied when:
+  - `model` is missing (nothing inherits the session model);
+  - `effort` is missing or differs from the matrix value for that role;
+  - a Phase 6 implementer or task reviewer, or a Phase 7 fix round, runs on `opus` without
+    a line `Complexity risk: <named risk>` or `Escalated after: <failed attempt>` in the brief;
+  - a Phase 10 wave fixer runs on `fable` without an `Escalated after: <wave and thread>` line
+    (the fixer is `opus`; `fable` is the escalation for a reopened or upheld-after-dispute thread).
+
+`effort-guard: override <reason>` in the brief allows a different effort or an unflagged
+opus dispatch; it never excuses a missing `model` or `effort`. Exit 2 denies; stderr says why.
+"""
+import json
+import re
+import sys
+
+PHASE = re.compile(r"^\s*p(\d{1,2})(?!\w)", re.I)
+OVERRIDE = re.compile(r"^\s*[-*]?\s*effort-guard:\s*override\s+\S", re.M | re.I)
+ESCALATED = re.compile(r"^\s*[-*]?\s*Escalated after:\s*\S", re.M | re.I)
+JUSTIFIED = re.compile(r"^\s*[-*]?\s*(Complexity risk|Escalated after):\s*\S", re.M | re.I)
+
+
+def expected_effort(phase, description, model):
+    """The model-matrix effort for a dispatch (SKILL.md § Model matrix)."""
+    d = description.lower()
+    if model == "haiku":
+        return "low"
+    if phase == 1 and re.search(r"design|brainstorm", d):
+        return "high"
+    if phase in (4, 5) and "plan" in d and re.search(r"author|revis", d) and not re.search(r"review|recheck", d):
+        return "high"
+    if phase == 7 and re.search(r"review|recheck", d) and "fix" not in d:
+        return "high"
+    if phase == 10 and re.search(r"wave|shepherd|fixer", d) and not re.search(r"triage|classif", d):
+        return "high"
+    return "medium"
+
+
+def deny(msg):
+    print(f"effort-guard: {msg}", file=sys.stderr)
+    sys.exit(2)
+
+
+def main():
+    try:
+        payload = json.load(sys.stdin)
+    except ValueError:
+        return
+    if payload.get("tool_name") != "Agent":
+        return
+    inp = payload.get("tool_input") or {}
+    description = inp.get("description") or ""
+    match = PHASE.match(description)
+    if not match:
+        return
+    phase = int(match.group(1))
+    model = (inp.get("model") or "").lower()
+    effort = (inp.get("effort") or "").lower()
+    prompt = inp.get("prompt") or ""
+
+    if not model:
+        deny(f"'{description}' passes no `model`, so it would run on the session model. Pass the "
+             "model-matrix alias for this role (SKILL.md § Model matrix); a role with no row gets a row first.")
+    want = expected_effort(phase, description, model)
+    if not effort:
+        deny(f"'{description}' passes no `effort`, so it would run at the session's level. "
+             f"Pass `effort: {want}` (the model-matrix value for this role).")
+    override = bool(OVERRIDE.search(prompt))
+    if effort != want and not override:
+        deny(f"'{description}' asks for `effort: {effort}`; the model matrix says `{want}` for this role. "
+             f"Dispatch with `effort: {want}`, or add the line `effort-guard: override <reason>` to the brief "
+             "when the change is deliberate (it is then measured in the step metrics).")
+    d = description.lower()
+    scoped_code_task = (phase == 6 and re.search(r"implementer|review", d)) or (phase == 7 and "fix" in d)
+    if scoped_code_task and model == "opus" and not JUSTIFIED.search(prompt) and not override:
+        deny(f"'{description}' runs on `opus` with no named risk. Add `Complexity risk: <one line>` copied from "
+             "the plan's flag, or `Escalated after: <the failed sonnet attempt>`; an unjustified flag "
+             "stays on `sonnet`.")
+    wave_fixer = phase == 10 and want == "high"
+    if wave_fixer and model == "fable" and not ESCALATED.search(prompt) and not override:
+        deny(f"'{description}' runs on `fable` with no escalation. The wave fixer is `opus`; `fable` is for a "
+             "wave holding a thread reopened after an earlier fix, or a disputed finding the reviewer upheld. "
+             "Add `Escalated after: <wave and thread>` to the brief, or dispatch on `opus`.")
+
+
+if __name__ == "__main__":
+    main()

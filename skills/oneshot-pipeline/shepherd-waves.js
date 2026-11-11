@@ -11,7 +11,9 @@ export const meta = {
 
 // args: { pr, worktree, slug, standingDecisions?, maxWaves?, reportDir?, fixModel?, fixEffort?, classifyEffort? }
 // fixEffort / classifyEffort: reasoning effort for the fixer and the classifier ('low'..'max'); unset = the
-// session default. Kept separate from fixModel so no-fable mode (fixModel 'opus') never changes effort by accident.
+// session default. Kept separate from fixModel so a model change never changes effort by accident.
+// fixModel: the fixer's model for every wave, default 'opus' (SKILL.md § Model matrix). The loop does not
+// escalate; a wave that needs the 'fable' escalation is dispatched by the controller (Phase 10a).
 const a = args || {}
 if (!a.pr || !a.worktree) throw new Error('args.pr and args.worktree are required')
 const PR = String(a.pr)
@@ -19,7 +21,7 @@ const WT = a.worktree
 const SLUG = a.slug || `pr-${PR}`
 const MAX_WAVES = a.maxWaves || 6
 const REPORT_DIR = a.reportDir || `/tmp/${SLUG}`
-const FIX_MODEL = a.fixModel || 'fable'
+const FIX_MODEL = a.fixModel || 'opus'
 const FIX_EFFORT = a.fixEffort ? { effort: a.fixEffort } : {}
 const CLASSIFY_EFFORT = a.classifyEffort ? { effort: a.classifyEffort } : {}
 const STANDING = a.standingDecisions || '(none given — park spec conflicts, do not decide them)'

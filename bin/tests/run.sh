@@ -259,6 +259,7 @@ rm "$REPO/.eslintrc.js"
 
 # ---------------------------------------------------------------- hooks
 if python3 "$BIN/tests/hooks.test.py" >"$TMP/hooks.out" 2>&1; then ok; else bad "hooks.test.py" "$(cat "$TMP/hooks.out")"; fi
+if python3 "$BIN/tests/effort-guard.test.py" >"$TMP/eg.out" 2>&1; then ok; else bad "effort-guard.test.py" "$(cat "$TMP/eg.out")"; fi
 if bash "$BIN/tests/wt-create.test.sh" >"$TMP/wt.out" 2>&1; then ok; else bad "wt-create.test.sh" "$(cat "$TMP/wt.out")"; fi
 if python3 "$BIN/tests/stall-watch.test.py" >"$TMP/sw.out" 2>&1; then ok; else bad "stall-watch.test.py" "$(cat "$TMP/sw.out")"; fi
 if python3 "$BIN/tests/papercut.test.py" >"$TMP/pc.out" 2>&1; then ok; else bad "papercut.test.py" "$(cat "$TMP/pc.out")"; fi
