@@ -60,6 +60,10 @@ class EffortGuardTest(unittest.TestCase):
             ("p7 recheck P7C-1/2", "opus", "high"),
             ("p7 PR1-1 review fixer", "sonnet", "medium"),
             ("p7 PR3 fix verification review", "sonnet", "medium"),
+            ("p8 PR1 rebase", "sonnet", "medium"),
+            ("p8 PR1 pre-pr-bot review", "opus", "high"),
+            ("p8 recheck P8A-1", "opus", "high"),
+            ("p8 PR1 fix P8A-1/2", "sonnet", "medium"),
             ("p9 PR1 body writer", "sonnet", "medium"),
             ("p10 wave-2 fixer", "opus", "high"),
             ("p10 PR3a-1 wave 1 shepherd", "opus", "high"),
@@ -99,6 +103,12 @@ class EffortGuardTest(unittest.TestCase):
         self.allowed("p7 PR4 fix round", model="opus", effort="medium",
                      prompt="Complexity risk: the fix changes the idempotency key shape\n")
         self.allowed("p7 PR1 correctness review", model="opus", effort="high")
+
+    def test_phase_8_pre_pr_review_runs_high_and_its_fix_round_needs_a_named_risk(self):
+        self.denied(r"model matrix says `high`", "p8 PR1 pre-pr-bot review", model="opus", effort="medium")
+        self.denied(r"no named risk", "p8 PR1 fix P8A-1", model="opus", effort="medium")
+        self.allowed("p8 PR1 fix P8A-1", model="opus", effort="medium",
+                     prompt="Escalated after: sonnet attempt left the reducer test red\n")
 
     def test_fable_wave_fixer_needs_an_escalation(self):
         self.denied(r"no escalation", "p10 wave-2 fixer", model="fable", effort="high")

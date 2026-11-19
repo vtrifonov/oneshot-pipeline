@@ -79,7 +79,7 @@ flowchart TD
 | 1 Brainstorm | A design agent drafts questions and options. You approve the design and the PR set. The lane (full or lite) and each PR's size are estimated. With `brainstorm: skip`, the controller builds the design brief from the request instead (a ticket, a doc or your message), records the approval as `request`, and the spec agent lists every decision it makes beyond it |
 | 2–5 Spec & Plan | Spec and plan are written, then checked by independent reviewer panels. Accepted findings go back to the agent that wrote the document. On the lite lane, spec and plan share one document and one reviewer |
 | 6 Implement | Subagent-driven development, RED test first, with scoped verification after each step |
-| 7–8 Review & gates | Fresh code reviewers (plus a local preview of the repo's gating AI review bot, when the adapter configures one), the full local suite, and a lane and size-budget check against the real diff |
+| 7–8 Review & gates | Fresh code reviewers, the full local suite, a lane and size-budget check against the real diff, and last, the review skills the adapter names to run the repo's gating AI review bot locally before the push |
 | 9 PR | Rebased once before the first push. It never opens with red checks |
 | 10 Shepherd | A fresh `pr-shepherd` agent works through each review wave: verify the claim, fix the class of bug, reply, resolve |
 | 11 Done | CI green, zero unresolved threads, review approved. Step metrics and a run row are written for retros |

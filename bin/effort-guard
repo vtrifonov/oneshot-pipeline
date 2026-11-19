@@ -12,7 +12,7 @@ ran on the session tier. Opus took 38% of implementer dispatches against a 20% f
 A `p<N>` dispatch is denied when:
   - `model` is missing (nothing inherits the session model);
   - `effort` is missing or differs from the matrix value for that role;
-  - a Phase 6 implementer or task reviewer, or a Phase 7 fix round, runs on `opus` without
+  - a Phase 6 implementer or task reviewer, or a Phase 7 or Phase 8 fix round, runs on `opus` without
     a line `Complexity risk: <named risk>` or `Escalated after: <failed attempt>` in the brief;
   - a Phase 10 wave fixer runs on `fable` without an `Escalated after: <wave and thread>` line
     (the fixer is `opus`; `fable` is the escalation for a reopened or upheld-after-dispute thread).
@@ -39,7 +39,7 @@ def expected_effort(phase, description, model):
         return "high"
     if phase in (4, 5) and "plan" in d and re.search(r"author|revis", d) and not re.search(r"review|recheck", d):
         return "high"
-    if phase == 7 and re.search(r"review|recheck", d) and "fix" not in d:
+    if phase in (7, 8) and re.search(r"review|recheck", d) and "fix" not in d:
         return "high"
     if phase == 10 and re.search(r"wave|shepherd|fixer", d) and not re.search(r"triage|classif", d):
         return "high"
@@ -81,7 +81,7 @@ def main():
              f"Dispatch with `effort: {want}`, or add the line `effort-guard: override <reason>` to the brief "
              "when the change is deliberate (it is then measured in the step metrics).")
     d = description.lower()
-    scoped_code_task = (phase == 6 and re.search(r"implementer|review", d)) or (phase == 7 and "fix" in d)
+    scoped_code_task = (phase == 6 and re.search(r"implementer|review", d)) or (phase in (7, 8) and "fix" in d)
     if scoped_code_task and model == "opus" and not JUSTIFIED.search(prompt) and not override:
         deny(f"'{description}' runs on `opus` with no named risk. Add `Complexity risk: <one line>` copied from "
              "the plan's flag, or `Escalated after: <the failed sonnet attempt>`; an unjustified flag "
