@@ -1,6 +1,6 @@
 # Repository and runtime adapter
 
-Read at Phase 0. Resolve settings from explicit user instructions, repository AGENTS.md/CLAUDE.md, and actual repository configuration. Record them in a run-context file before dispatch. Never assume another repository's layout or policies.
+Read at Phase 0. Resolve settings from explicit user instructions, repository AGENTS.md/CLAUDE.md, and actual repository configuration. Record them in a run-context file before dispatch. Never assume another repository's layout or policies. When `repository-adapter.local.md` exists beside this file (gitignored, per machine), read it too: its bindings for this machine's organisations and tools fill in the settings below.
 
 | Setting | Resolution |
 |---|---|
@@ -16,6 +16,7 @@ Read at Phase 0. Resolve settings from explicit user instructions, repository AG
 | Scoped verification | verify-diff supports TypeScript/JavaScript projects using tsc, oxlint or eslint (picked from the repo config) and vitest; it prints what the push gate still owns. Other toolchains use equivalent scoped commands from CI. |
 | GitHub integration | Resolve owner/name from the current checkout or --repo. ci-wait, pr-threads and pr-thread-close work through authenticated gh. |
 | Optional bot protocol | review-wait returns on any APPROVED/CHANGES_REQUESTED review by the AI reviewer on the current head; it finds the reviewer from an ai-review: marker, or AI_REVIEW_BOT forces a login. review-wait exits 4 when threads from any reviewer appear before the bot decides; thread-watch waits for threads from any reviewer on one or more PRs. audit-wait --trigger posts one /ai-review comment when a close had no push. Use native review APIs when these protocols are absent. |
+| Optional bot preview | A local run of the repository's gating AI review bot that posts nothing. Covers: the command that builds its brief and prints the reviewer prompt, which repositories it covers, the agent type to dispatch, and how its severities map to the Finding contract. Phase 7 runs it when configured (`phases-7-9-review-gates-pr.md` §7); otherwise it is skipped and recorded. |
 | Optional hook | block-full-suite.sh applies only to repositories opting in with a .scoped-verification marker at their root. Registration is per user. |
 
 Standing questions, where applicable:
