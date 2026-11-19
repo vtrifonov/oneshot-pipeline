@@ -147,7 +147,7 @@ function classifyPrompt(w, wait, parkedIds) {
 ${ci}
 ${parked}
 1. Run (one Bash call, 300000 ms timeout): cd ${WT}; ~/.claude/bin/pr-threads ${PR} --reviews > ${REPORT_DIR}/wave-${w}.md — then Read that file. Its first line is the header "# PR #${PR} (...): N unresolved of M review threads" — copy it verbatim into headerLine. If the file is missing, empty, or has no such header, return headerLine "MISSING" and an empty items list; never infer zero findings from a missing file.
-2. For EVERY unresolved thread and every review-body finding: open the anchored code, decide whether the failure scenario is real in the current code (verified true/false), and assign severity under this contract:
+2. For EVERY unresolved thread and every review-body finding (a thread on an approved review, or one labelled non-blocking, included): open the anchored code, decide whether the failure scenario is real in the current code (verified true/false), and assign severity under this contract:
 ${CONTRACT}
 The bot's own <!-- ai-review:sev=... --> marker is a cross-check, not the answer. A review BODY summarises the inline threads: it is an item (kind review_body) only for a defect that NO thread on this head anchors — otherwise it is a duplicate and is not listed. A "Pass" or approval body is never an item. A thread with no line number is still an item (path only).
 3. Append to ${REPORT_DIR}/wave-${w}.md a section "## Triage" with one line per item: severity, commentId (or review id / check name), path:line, claim, verified, one-line rationale.
