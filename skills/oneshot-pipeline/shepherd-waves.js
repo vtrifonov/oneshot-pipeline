@@ -26,7 +26,7 @@ const FIX_EFFORT = a.fixEffort ? { effort: a.fixEffort } : {}
 const CLASSIFY_EFFORT = a.classifyEffort ? { effort: a.classifyEffort } : {}
 const STANDING = a.standingDecisions || '(none given — park spec conflicts, do not decide them)'
 
-const CONTRACT = `Finding contract. A finding has four parts in this order: severity, claim (one sentence), failure scenario (concrete input or state -> wrong output, crash, or violated invariant), fix sketch. Severity is DERIVED from the scenario: BLOCKER = security, data loss, deploy-safety rule, or spec requirement not met; MAJOR = correctness bug, missing test for a stated invariant, coupled surface left out; MINOR = anything without a concrete failure scenario (style, naming, hypothetical future need, "consider", "could be cleaner"). A finding that arrives without a failure scenario is MINOR regardless of the label the reviewer put on it.`
+const CONTRACT = `Finding contract. A finding has four parts in this order: severity, claim (one sentence), failure scenario (concrete input or state -> wrong output, crash, or violated invariant), fix sketch. Severity is DERIVED from the scenario: BLOCKER = security, data loss, deploy-safety rule, or spec requirement not met; MAJOR = correctness bug, missing test for a stated invariant, coupled surface left out; MINOR = anything without a concrete failure scenario (style, naming, hypothetical future need, "consider", "could be cleaner"), and also a real scenario that is a corner case: it needs an unusual setup, is already recoverable or caught elsewhere, or the fix costs more than the risk. A finding that arrives without a failure scenario is MINOR regardless of the label the reviewer put on it. A finding the reviewer itself labelled a nit (marker ai-review:sev=nit, or the word Nit in its heading) is MINOR. It is MAJOR only with a reach path: a request or input that normal use sends through the code as it ships on this head, named with the file:line where it enters. A scenario that depends on a change nobody has made (a future route or file, a later reassignment, configuration that is not in the repository) has no reach path.`
 
 const CMD_RULES = `Command rules: every Bash call starts with "cd ${WT}; " (that semicolon form is the one allowed compound; do not rely on a persisted cwd). No multi-line Bash, no && chains, no rm or any destructive command (mv -f, git clean, git checkout --, clearing tsconfig.tsbuildinfo) — report the need instead. Explicit timeout on every tsc/vitest/eslint call. Never start a server, emulator, dev process or --watch. Never run npm test, npm run test:*, npm run build, or a path-less vitest (a hook rejects them; scoped verify-diff only). Never poll CI and never call gh pr checks --watch or gh run watch.`
 
@@ -67,12 +67,14 @@ const CLASSIFY_SCHEMA = {
           path: { type: 'string' },
           line: { type: 'integer' },
           severity: { type: 'string', enum: ['BLOCKER', 'MAJOR', 'MINOR'] },
+          reviewerSeverity: { type: 'string', enum: ['blocker', 'warning', 'nit', 'none'] },
+          reachPath: { type: 'string' },
           claim: { type: 'string' },
           scenario: { type: 'string' },
           verified: { type: 'boolean' },
           rationale: { type: 'string' },
         },
-        required: ['kind', 'severity', 'claim', 'verified'],
+        required: ['kind', 'severity', 'reviewerSeverity', 'claim', 'verified'],
       },
     },
     unresolvedThreads: { type: 'integer' },
@@ -149,7 +151,7 @@ ${parked}
 1. Run (one Bash call, 300000 ms timeout): cd ${WT}; ~/.claude/bin/pr-threads ${PR} --reviews > ${REPORT_DIR}/wave-${w}.md — then Read that file. Its first line is the header "# PR #${PR} (...): N unresolved of M review threads" — copy it verbatim into headerLine. If the file is missing, empty, or has no such header, return headerLine "MISSING" and an empty items list; never infer zero findings from a missing file.
 2. For EVERY unresolved thread and every review-body finding (a thread on an approved review, or one labelled non-blocking, included): open the anchored code, decide whether the failure scenario is real in the current code (verified true/false), and assign severity under this contract:
 ${CONTRACT}
-The bot's own <!-- ai-review:sev=... --> marker is a cross-check, not the answer. A review BODY summarises the inline threads: it is an item (kind review_body) only for a defect that NO thread on this head anchors — otherwise it is a duplicate and is not listed. A "Pass" or approval body is never an item. A thread with no line number is still an item (path only).
+Copy the bot's own <!-- ai-review:sev=... --> marker into reviewerSeverity (blocker, warning, nit; none when the item has no marker and no severity word in its heading). A blocker or warning marker is a cross-check, not the answer: derive severity from the scenario. A nit marker sets severity MINOR; to return MAJOR for it, fill reachPath with the file:line where a normal-use request enters the failing code on this head. An item with reviewerSeverity nit, severity MAJOR and no reachPath is treated as MINOR. A review BODY summarises the inline threads: it is an item (kind review_body) only for a defect that NO thread on this head anchors — otherwise it is a duplicate and is not listed. A "Pass" or approval body is never an item. A thread with no line number is still an item (path only).
 3. Append to ${REPORT_DIR}/wave-${w}.md a section "## Triage" with one line per item: severity, commentId (or review id / check name), path:line, claim, verified, one-line rationale.
 4. Return structured output listing every item, unresolvedThreads (the N from the header), parkedStillOpen, reviewBodyFindings (items of kind review_body only), headerLine, and waveFile = ${REPORT_DIR}/wave-${w}.md.
 ${CMD_RULES}`
@@ -207,7 +209,12 @@ for (let w = 1; w <= MAX_WAVES; w++) {
     return { status: 'classify_failed', pr: PR, head, detail: `pr-threads header not read: ${cls.headerLine}`, waves }
   }
   // parkedIds holds first-comment ids only (one per thread), so its length is a thread count.
-  const items = (cls.items || []).filter(i => !parkedIds.includes(String(i.commentId || '')))
+  // A reviewer-labelled nit is fixed only with a named reach path; without one it is replied-closed (Finding contract).
+  const items = (cls.items || [])
+    .filter(i => !parkedIds.includes(String(i.commentId || '')))
+    .map(i => (i.reviewerSeverity === 'nit' && i.severity === 'MAJOR' && !(i.reachPath || '').trim()
+      ? { ...i, severity: 'MINOR', rationale: `reviewer nit with no reach path. ${i.rationale || ''}`.trim() }
+      : i))
   const blockers = items.filter(i => i.severity === 'BLOCKER')
   const majors = items.filter(i => i.severity === 'MAJOR')
   const actionable = items.filter(i => i.severity === 'BLOCKER' || i.severity === 'MAJOR')

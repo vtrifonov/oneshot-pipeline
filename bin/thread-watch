@@ -17,7 +17,7 @@
 
 set -o pipefail
 
-PRS=(); MAX=""; INTERVAL=60; REPO=""
+PRS=(); MAX=""; INTERVAL=120; REPO=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --max) MAX="$2"; shift 2 ;;
@@ -32,6 +32,8 @@ done
 here=$(dirname "$(readlink -f "$0")")
 # shellcheck source=lib/resolve-pr-repo.sh
 . "$here/lib/resolve-pr-repo.sh"
+# shellcheck source=lib/gh-rate-sleep.sh
+. "$here/lib/gh-rate-sleep.sh"
 # shellcheck source=lib/unresolved-threads.sh
 . "$here/lib/unresolved-threads.sh"
 for pr in "${PRS[@]}"; do
@@ -47,5 +49,5 @@ while :; do
         if [ "$n" != "?" ] && [ "$n" -gt 0 ]; then echo "THREADS pr=$pr unresolved=$n authors=${summary#* }"; exit 0; fi
     done
     if [ -n "$MAX" ] && [ $(( $(date +%s) - start )) -ge "$MAX" ]; then echo "TIMEOUT after ${MAX}s prs=${PRS[*]} no unresolved threads"; exit 2; fi
-    sleep "$INTERVAL"
+    gh_rate_sleep "$INTERVAL"
 done

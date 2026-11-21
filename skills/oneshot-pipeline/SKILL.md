@@ -137,6 +137,8 @@ A finding has four parts, in this order: **severity**, **claim** (one sentence),
 - **MAJOR** — correctness bug, missing test for a stated invariant, coupled surface left out.
 - **MINOR** — anything without a concrete failure scenario: style, naming, hypothetical future need, "consider", "could be cleaner". Also a real scenario that is a corner case: it needs an unusual setup, is already recoverable or caught elsewhere, or the fix costs more than the risk.
 
+**A finding the reviewer itself labelled a nit** (`ai-review:sev=nit`, or "Nit" in its heading) is MINOR. It is MAJOR only with a **reach path**: a request or input that normal use sends through the code as it ships on this head, named with the `file:line` where it enters. A scenario that depends on a change nobody has made (a future route or file, a later reassignment, configuration that is not in the repository) has no reach path. This holds for a nit on a spec or plan file too: a cheap edit is still an edit the next review round reads.
+
 Controller disposition: validate premises and deduplicate first; mark accepted/rejected/duplicate/unresolved with evidence. A plausible scenario is not proof. Fix every accepted BLOCKER and MAJOR (fix the class, not the instance). MINOR is **optional by default** — apply only when it is a one-line change in a file already being edited; otherwise list it under "Parked (MINOR)" in the PR body with one line of rationale. On a bot thread, MINOR means a rationale reply and a close with no edit (Phase 10). A finding that arrives without a failure scenario is MINOR regardless of the label the reviewer put on it. A clean review is valid; no finding quota. Check premises before adding guards or tests for impossible states.
 
 ## Brief discipline — paste into EVERY subagent brief
@@ -231,6 +233,8 @@ Every phase opens with `run-metrics.py mark <slug> phase <N>` (§ Step metrics).
 | "Full lane means the same four agents twice" | Full defaults to two spec reviewers and one fresh plan reviewer. Add only named risk coverage; each phase has a different job. |
 | "It's only MINOR but I'll fix it anyway" | Every unforced change is a new surface for the next round. Park it with a rationale line. |
 | "Reviewer marked it MAJOR" | Severity comes from the failure scenario. No scenario → MINOR, whatever the label. |
+| "The nit has a concrete scenario, so it is real" | The reviewer writes a scenario for every nit. Name the reach path (`file:line` a normal request enters today) or reply and close. |
+| "It's a doc nit, the edit is free" | Each edit is a new diff for the next round to review. Reviewer nit with no reach path → reply and close, in docs too. |
 | "Lite lane, so one review pass" | Lite drops security/architecture review, never `correctness/testing review`. Full runs both. |
 | "I'll add the metrics row later" | Done includes the row. Later is never; the retro then has nothing to read. |
 | "I'll mark the phase once I've got going" | The mark is the phase's first command. A late mark bills this phase's work to the previous one, and the retro compares the wrong numbers. |

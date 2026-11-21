@@ -14,7 +14,7 @@
 
 set -o pipefail
 
-PR=""; MAX=240; INTERVAL=30; REVIEW=${CI_REVIEW_CHECK:-'^$'}; REPO=""
+PR=""; MAX=240; INTERVAL=60; REVIEW=${CI_REVIEW_CHECK:-'^$'}; REPO=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --max) MAX="$2"; shift 2 ;;
@@ -28,6 +28,8 @@ done
 [ -z "$PR" ] && { echo "usage: ci-wait <pr> [--max S] [--interval S] [--review-check REGEX] [--repo owner/name]" >&2; exit 64; }
 # shellcheck source=lib/resolve-pr-repo.sh
 . "$(dirname "$(readlink -f "$0")")/lib/resolve-pr-repo.sh"
+# shellcheck source=lib/gh-rate-sleep.sh
+. "$(dirname "$(readlink -f "$0")")/lib/gh-rate-sleep.sh"
 REPO=$(resolve_pr_repo ci-wait "$PR" "$REPO") || exit 64
 REPOFLAG=(--repo "$REPO")
 
@@ -56,5 +58,5 @@ while :; do
         if [ "$pending" = 0 ]; then echo "ALL CHECKS SETTLED (configured exclusions applied)"; exit 0; fi
     fi
     if [ $(( $(date +%s) - start )) -ge "$MAX" ]; then echo "TIMEOUT after ${MAX}s — still pending; call ci-wait again"; exit 2; fi
-    sleep "$INTERVAL"
+    gh_rate_sleep "$INTERVAL"
 done

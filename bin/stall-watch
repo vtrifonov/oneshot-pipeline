@@ -39,6 +39,7 @@ def parse_ts(s):
 def pending_tool_call(path):
     """Return (ts, name) of the last tool_use with no later tool_result, else None."""
     pending = {}
+    seen_results = set()
     with open(path, errors="replace") as f:
         for line in f:
             try:
@@ -52,8 +53,13 @@ def pending_tool_call(path):
                 if not isinstance(block, dict):
                     continue
                 if block.get("type") == "tool_use":
-                    pending[block.get("id")] = (parse_ts(row.get("timestamp", "1970-01-01T00:00:00")), block.get("name", "?"))
+                    # Snapshot rows (type/hash, no timestamp) replay old tool_use blocks after
+                    # their results; registering them pinned a 1970 timestamp and a false STALL.
+                    if not row.get("timestamp") or block.get("id") in seen_results:
+                        continue
+                    pending[block.get("id")] = (parse_ts(row["timestamp"]), block.get("name", "?"))
                 elif block.get("type") == "tool_result":
+                    seen_results.add(block.get("tool_use_id"))
                     pending.pop(block.get("tool_use_id"), None)
     if not pending:
         return None
@@ -77,14 +83,34 @@ def awaiting_model(path):
 def newest_transcript(session, agent):
     pattern = os.path.join(session, "subagents", f"agent-{agent or '*'}.jsonl")
     files = glob.glob(pattern)
+    if not files and agent:
+        files = transcripts_named(session, agent)
     if not files:
         return None
     return max(files, key=os.path.getmtime)
 
 
+def transcripts_named(session, name):
+    found = []
+    for meta in glob.glob(os.path.join(session, "subagents", "agent-*.meta.json")):
+        try:
+            with open(meta) as f:
+                if json.load(f).get("name") == name:
+                    found.append(meta[: -len(".meta.json")] + ".jsonl")
+        except (OSError, ValueError):
+            continue
+    return [p for p in found if os.path.exists(p)]
+
+
 def head(worktree):
-    r = subprocess.run(["git", "-C", worktree, "rev-parse", "HEAD"], capture_output=True, text=True)
-    return r.stdout.strip() if r.returncode == 0 else ""
+    return resolve_commit(worktree, "HEAD")
+
+
+def resolve_commit(worktree, ref):
+    r = subprocess.run(["git", "-C", worktree, "rev-parse", "--verify", f"{ref}^{{commit}}"], capture_output=True, text=True)
+    if r.returncode != 0:
+        print(f"stall-watch: cannot resolve {ref} in {worktree}", file=sys.stderr); sys.exit(64)
+    return r.stdout.strip()
 
 
 def main():
@@ -105,6 +131,8 @@ def main():
               f"${{CLAUDE_CONFIG_DIR:-~/.claude}}/projects/<proj>/<session-id>/", file=sys.stderr); sys.exit(64)
     if a.agent and a.agent.startswith("agent-"):
         a.agent = a.agent[len("agent-"):]
+    if a.worktree and a.base:
+        a.base = resolve_commit(a.worktree, a.base)
     start = time.time()
     while True:
         now = time.time()

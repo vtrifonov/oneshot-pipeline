@@ -34,6 +34,29 @@ class SubagentGuardTest(unittest.TestCase):
         self.assertEqual(run(ws).returncode, 2)
         self.assertEqual(run({**ws, "agent_id": None}).returncode, 0)
 
+    def test_background_ios_and_test_runners_denied(self):
+        for c in ("xcodebuild test -scheme X", "npm run test:ios", "node scripts/ios.mjs test", "node --test", "npm test", "npx jest"):
+            p = {"tool_name": "Bash", "agent_id": "a1", "tool_input": {"command": c, "run_in_background": True}}
+            r = subprocess.run(["bash", str(BIN / self.S)], input=json.dumps(p), text=True, capture_output=True)
+            self.assertEqual(r.returncode, 2, c)
+            self.assertIn("FOREGROUND", r.stderr)
+
+    def test_other_session_scratchpad_read_denied(self):
+        def run(command, agent="a1"):
+            p = {"tool_name": "Bash", "session_id": "sess-own", "tool_input": {"command": command}}
+            if agent:
+                p["agent_id"] = agent
+            return subprocess.run(["bash", str(BIN / self.S)], input=json.dumps(p), text=True, capture_output=True)
+        other = "/private/tmp/claude-502/-proj/sess-other/scratchpad/out.txt"
+        own = "/private/tmp/claude-502/-proj/sess-own/scratchpad/out.txt"
+        for c in (f"tail -n 50 {other}", f"cat {other}", f'rg "FAIL" {other}', f"head {other.replace('/private', '')}"):
+            r = run(c)
+            self.assertEqual(r.returncode, 2, c)
+            self.assertIn("worktree", r.stderr)
+        self.assertEqual(run(f"tail -n 50 {own}").returncode, 0)
+        self.assertEqual(run("tail -n 50 /tmp/probe.txt").returncode, 0)
+        self.assertEqual(run(f"tail {other}", agent=None).returncode, 0)
+
     def test_rm_outside_scratch_denied(self):
         r = run_hook(self.S, "rm -f src/x.ts", agent="a1")
         self.assertEqual(r.returncode, 2)

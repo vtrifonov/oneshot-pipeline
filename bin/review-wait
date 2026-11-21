@@ -27,7 +27,7 @@
 
 set -o pipefail
 
-PR=""; MAX=240; INTERVAL=30; REPO=""
+PR=""; MAX=240; INTERVAL=60; REPO=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --max|--timeout) MAX="$2"; shift 2 ;;
@@ -41,6 +41,8 @@ done
 [ -z "$PR" ] && { echo "usage: review-wait <pr> [--max S] [--interval S] [--repo owner/name]" >&2; exit 64; }
 # shellcheck source=lib/resolve-pr-repo.sh
 . "$(dirname "$(readlink -f "$0")")/lib/resolve-pr-repo.sh"
+# shellcheck source=lib/gh-rate-sleep.sh
+. "$(dirname "$(readlink -f "$0")")/lib/gh-rate-sleep.sh"
 REPO=$(resolve_pr_repo review-wait "$PR" "$REPO") || exit 64
 
 BOT=${AI_REVIEW_BOT:-}   # optional: when unset, the login of the newest review carrying an ai-review: marker on the head
@@ -119,5 +121,5 @@ while :; do
         echo "TIMEOUT after ${MAX}s head=$head — no bot verdict on this head yet (bot=${bot:-unknown}; set AI_REVIEW_BOT to force a login, or check: gh api repos/$REPO/pulls/$PR/reviews --jq '.[].user.login'); call review-wait again"
         exit 2
     fi
-    sleep "$INTERVAL"
+    gh_rate_sleep "$INTERVAL"
 done

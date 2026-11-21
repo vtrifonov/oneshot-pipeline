@@ -21,7 +21,7 @@
 
 set -o pipefail
 
-PR=""; MAX=240; INTERVAL=20; REPO=""; IDS=(); TRIGGER=0; TRIGGERED=0
+PR=""; MAX=240; INTERVAL=45; REPO=""; IDS=(); TRIGGER=0; TRIGGERED=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --max|--timeout) MAX="$2"; shift 2 ;;
@@ -36,6 +36,8 @@ done
 [ -z "$PR" ] || [ "${#IDS[@]}" = 0 ] && { echo "usage: audit-wait <pr> <first-comment-id>... [--max S] [--interval S] [--repo owner/name]" >&2; exit 64; }
 # shellcheck source=lib/resolve-pr-repo.sh
 . "$(dirname "$(readlink -f "$0")")/lib/resolve-pr-repo.sh"
+# shellcheck source=lib/gh-rate-sleep.sh
+. "$(dirname "$(readlink -f "$0")")/lib/gh-rate-sleep.sh"
 REPO=$(resolve_pr_repo audit-wait "$PR" "$REPO") || exit 64
 OWNER=${REPO%/*}; NAME=${REPO#*/}
 
@@ -82,5 +84,5 @@ while :; do
         echo "AUDIT DONE $line"
         exit 2
     fi
-    sleep "$INTERVAL"
+    gh_rate_sleep "$INTERVAL"
 done

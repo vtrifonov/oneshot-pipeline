@@ -7,7 +7,8 @@
 # Classes (see docs/superpowers/plans/2026-10-09-papercuts-enforcement.md):
 #   delete outside scratch, any recursive delete (the ask rule prompts even in
 #   scratch), multi-line/heredoc, inline interpreter code (python -c, bash -c),
-#   git revert/stash/clean/reset --hard, raw git worktree add.
+#   git revert/stash/clean/reset --hard, raw git worktree add, any background
+#   run, Bash readers (tail/cat/head/rg/...) on another session's scratchpad.
 # git global options (-C, -c, --git-dir, ...) and wrappers (ctx-wire run,
 # timeout, env, command, nohup, xargs, ...) are stripped before matching.
 # Fails open: no command, no agent_id, or unparsable input → exit 0.
@@ -21,16 +22,31 @@ set -f  # never glob-expand operands in the hook's own cwd
 deny() { printf '%s\n' "$1" >&2; exit 2; }
 
 # A background command never wakes a subagent when it finishes: the agent idles
-# "waiting for the notification" until the controller nudges it.
+# "waiting for the notification" until the controller nudges it (three stalls
+# on make compile / make update-contract in one run). Same for a pgrep wait-loop.
 # Checked before the command: a Monitor can carry a ws source and no command.
 # Register this hook for the Monitor tool too, or Monitor calls never reach it.
 BACKGROUND=$(printf '%s' "$INPUT" | jq -r '.tool_input.run_in_background // false' 2>/dev/null)
+SESSION_ID=$(printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null)
 TOOL=$(printf '%s' "$INPUT" | jq -r '.tool_name // empty' 2>/dev/null)
 if [ "$BACKGROUND" = "true" ] || [ "$TOOL" = "Monitor" ]; then
     deny "Run commands in the FOREGROUND in subagents (set the Bash timeout up to 600000): a background run never wakes you when it ends, so you stall until the controller notices. If it needs longer than 10 minutes, narrow it or report to the controller."
 fi
 CMD=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null)
 [ -z "$CMD" ] && exit 0
+# The harness also auto-backgrounds a call that outlives the default 120 s timeout,
+# with the same stall. Slow make targets must carry an explicit long timeout.
+TIMEOUT=$(printf '%s' "$INPUT" | jq -r '.tool_input.timeout // 0' 2>/dev/null)
+case "$CMD" in
+    *"make "*compile*|*"make "*lint*|*"make "*unit-tests*|*"make "*install*|*"make "*update-contract*)
+        if [ "${TIMEOUT%%.*}" -lt 300000 ] 2>/dev/null; then
+            deny "Slow make targets need an explicit Bash timeout of 600000 in subagents: without it the harness backgrounds the call at 120 s and you never get its result. Re-run with timeout: 600000."
+        fi ;;
+esac
+case "$CMD" in
+    *until*pgrep*|*while*pgrep*)
+        deny "No pgrep wait-loops in subagents: run the test in the foreground instead of waiting on another run." ;;
+esac
 
 case "$CMD" in
     *$'\n'*|*'<<'*)
@@ -88,6 +104,20 @@ strip_git_globals() { # drop -C <p>, -c <k=v>, --git-dir=…, --work-tree=…, -
 check_segment() {
     local seg tok rest
     seg=$(strip_wrappers "$1")
+    case "$seg" in
+        tail|tail\ *|cat|cat\ *|head|head\ *|less|less\ *|more|more\ *|rg|rg\ *|grep|grep\ *|egrep\ *|fgrep\ *|wc\ *|sed\ *|awk\ *)
+            if [ -n "$SESSION_ID" ]; then
+                for tok in $seg; do
+                    tok=$(unquote "$tok")
+                    case "$tok" in
+                        /private/tmp/claude-*/*|/tmp/claude-*/*)
+                            case "$tok" in */"$SESSION_ID"/*) ;; *)
+                                deny "Do not read another session's scratchpad ($tok): the permission prompt it triggers is never answered and you stall. Print the output directly in the command that produced it, or write it inside your worktree and read it from there. (Only Bash readers are checked; own-vs-other is decided by session id.)" ;;
+                            esac ;;
+                    esac
+                done
+            fi ;;
+    esac
     case "$seg" in
         xargs\ rm|xargs\ rm\ *|xargs\ rmdir\ *|xargs\ unlink\ *)
             deny "Subagents cannot pipe into rm (operands unknown). Report the paths to the controller; it deletes." ;;

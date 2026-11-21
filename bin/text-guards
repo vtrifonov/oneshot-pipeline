@@ -89,8 +89,25 @@ awk -F'\t' '
         printf "broad, top-level directory scan only (%d):\n", nb; for (i = 1; i <= nb; i++) print b[i]
     }' "$tmp/grouped"
 if [ "$want_cmd" = 1 ]; then
+    # Suites that shell out to git or another process hit vitest's 5 s per-test timeout whenever
+    # they share the worker pool with a 100+ file run (two git-driven suites timed out in three
+    # consecutive runs and passed alone every time). They get their own `npx vitest run` line,
+    # to run after the main one.
+    SHELLERS='execFileSync|execSync|spawnSync|simple-git|child_process'
+    cut -f1 "$tmp/grouped" > "$tmp/suites"
+    : > "$tmp/alone"
+    if [ -s "$tmp/suites" ]; then
+        tr '\n' '\0' < "$tmp/suites" | xargs -0 rg -l -e "$SHELLERS" 2>/dev/null > "$tmp/alone" || true
+    fi
     printf '\nnpx vitest run'
-    while IFS=$'\t' read -r t _; do printf ' %q' "$t"; done < "$tmp/grouped"
+    while IFS= read -r t; do
+        grep -qxF -- "$t" "$tmp/alone" || printf ' %q' "$t"
+    done < "$tmp/suites"
     printf '\n'
+    if [ -s "$tmp/alone" ]; then
+        printf '# shell-out suites, run alone after the line above (they time out under a shared pool):\nnpx vitest run'
+        while IFS= read -r t; do printf ' %q' "$t"; done < "$tmp/alone"
+        printf '\n'
+    fi
 fi
 exit 0
