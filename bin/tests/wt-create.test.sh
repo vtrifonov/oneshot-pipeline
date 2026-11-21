@@ -56,6 +56,18 @@ git -C "$TMP/work/svc" config wt.base master
 out=$("$BIN/wt-create" feat/on-config --repo "$TMP/work/svc" 2>&1); rc=$?
 if [ "$rc" = 0 ] && [ "$(git -C "$TMP/work/svc-worktrees/feat-on-config" rev-parse HEAD 2>/dev/null)" = "$(git -C "$TMP/work/svc" rev-parse master)" ]; then ok; else bad "git config wt.base overrides the default" "rc=$rc $out"; fi
 git -C "$TMP/work/svc" config --unset wt.base
+# git config wt.setup runs inside the new worktree, after the env copy and the repo hook.
+git -C "$TMP/work/svc" config wt.setup 'pwd -P > .wt-setup-cwd; test -f .env.local && echo env-ok >> .wt-setup-cwd'
+out=$("$BIN/wt-create" feat/setup --repo "$TMP/work/svc" 2>&1); rc=$?
+WT3="$TMP/work/svc-worktrees/feat-setup"
+if [ "$rc" = 0 ] && [ "$(head -1 "$WT3/.wt-setup-cwd" 2>/dev/null)" = "$(cd "$WT3" 2>/dev/null && pwd -P)" ] && grep -q env-ok "$WT3/.wt-setup-cwd" 2>/dev/null; then ok; else bad "wt.setup runs in the worktree after the env copy" "rc=$rc $out"; fi
+if printf '%s' "$out" | tail -1 | grep -q "^WORKTREE $WT3$"; then ok; else bad "WORKTREE stays the last line after wt.setup" "$out"; fi
+out=$("$BIN/wt-create" feat/no-setup --repo "$TMP/work/svc" --no-setup 2>&1); rc=$?
+if [ "$rc" = 0 ] && [ ! -e "$TMP/work/svc-worktrees/feat-no-setup/.wt-setup-cwd" ] && printf '%s' "$out" | grep -q 'skipped wt.setup'; then ok; else bad "--no-setup skips wt.setup and says so" "rc=$rc $out"; fi
+git -C "$TMP/work/svc" config wt.setup 'exit 7'
+out=$("$BIN/wt-create" feat/setup-fails --repo "$TMP/work/svc" 2>&1); rc=$?
+if [ "$rc" = 0 ] && printf '%s' "$out" | grep -q 'wt.setup exited 7' && printf '%s' "$out" | tail -1 | grep -q '^WORKTREE '; then ok; else bad "a failing wt.setup warns, keeps the worktree and still prints WORKTREE" "rc=$rc $out"; fi
+git -C "$TMP/work/svc" config --unset wt.setup
 cp -R "$TMP/work/svc" "/tmp/wtc-svc-$$"
 out=$("$BIN/wt-create" feat/y --repo "/tmp/wtc-svc-$$" 2>&1); rc=$?
 rm -rf "/tmp/wtc-svc-$$"
