@@ -221,8 +221,9 @@ class RollupTest(unittest.TestCase):
         self.assertIn("note: one stopped duplicate", one.stdout)
         lenses = self.run_metrics("show", "--lenses")
         self.assertEqual(lenses.returncode, 0, lenses.stderr)
-        self.assertRegex(lenses.stdout, r"requirements/architecture\s+2\s+2\s+2\s+2\.0M")
-        self.assertRegex(lenses.stdout, r"security\s+2\s+2\s+2\s+2\.0M\s+40k\s+0\s+0\.00\s+2")
+        # Columns: passes, measured, unknown, from ledger, runs, tokens, meas tok, out, acc B+M, B+M/Mtok, dry streak.
+        self.assertRegex(lenses.stdout, r"requirements/architecture\s+2\s+2\s+0\s+0\s+2\s+2\.0M\s+2\.0M\s+40k\s+3\s+1\.50\s+0")
+        self.assertRegex(lenses.stdout, r"security\s+2\s+2\s+0\s+0\s+2\s+2\.0M\s+2\.0M\s+40k\s+0\s+0\.00\s+2")
         failures = self.run_metrics("show", "--failures")
         self.assertIn("cwdx1, installx1", failures.stdout)
         effort = self.run_metrics("show", "--effort")
