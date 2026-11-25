@@ -11,7 +11,9 @@
 #   wt.setup   run `git config wt.setup` (a shell command, per repo, local only) inside
 #              the worktree, e.g. "npm ci && npm run build:runtime-packages";
 #              --no-setup skips it. A failure warns and keeps the worktree.
-#   base       --base, else git config wt.base, else origin/develop, else origin/HEAD
+#   node deps  without wt.setup, link the main checkout's node_modules into the worktree
+#              when the lockfile is identical; --no-setup skips it too
+#   base      --base, else git config wt.base, else origin/develop, else origin/HEAD
 # Last stdout line: WORKTREE <path>. Exit 64 on refusal, 1 on git failure.
 
 set -o pipefail
@@ -22,7 +24,7 @@ while [ $# -gt 0 ]; do
         --repo) MAIN="$2"; shift 2 ;;
         --dir) DIR="$2"; shift 2 ;;
         --no-setup) RUN_SETUP=0; shift ;;
-        -h|--help) sed -n '2,15p' "$0"; exit 0 ;;
+        -h|--help) sed -n '2,17p' "$0"; exit 0 ;;
         -*) echo "wt-create: unknown flag $1" >&2; exit 64 ;;
         *) BRANCH="$1"; shift ;;
     esac
@@ -92,5 +94,20 @@ if [ -n "$SETUP" ]; then
     fi
 fi
 
-[ -d "$WT/node_modules" ] || [ -L "$PARENT/node_modules" ] || echo "hint: no node_modules in the worktree; run the repo's install from inside $WT (not --ignore-scripts: it skips native builds like sharp/isolated-vm)"
+# A Node worktree with no node_modules of its own fails typechecks that resolve types from the
+# project dir (TS2688), even with $PARENT/node_modules linked. When the main checkout's deps were
+# installed from the same lockfile, reuse them; otherwise leave the install to the hint below.
+if [ "$RUN_SETUP" = 1 ] && [ -z "$SETUP" ] && [ ! -e "$WT/node_modules" ] && [ -d "$MAIN/node_modules" ]; then
+    for lock in package-lock.json yarn.lock pnpm-lock.yaml; do
+        [ -f "$WT/$lock" ] || continue
+        if cmp -s "$WT/$lock" "$MAIN/$lock"; then
+            ln -s "$MAIN/node_modules" "$WT/node_modules"; echo "linked node_modules from $MAIN ($lock matches)"
+        else
+            echo "wt-create: $lock differs from $MAIN; not reusing its node_modules" >&2
+        fi
+        break
+    done
+fi
+
+[ -d "$WT/node_modules" ] || [ -L "$WT/node_modules" ] || echo "hint: no node_modules in the worktree; run the repo's install from inside $WT (not --ignore-scripts: it skips native builds like sharp/isolated-vm)"
 echo "WORKTREE $WT"

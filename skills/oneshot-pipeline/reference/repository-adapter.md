@@ -4,7 +4,7 @@ Read at Phase 0. Resolve settings from explicit user instructions, repository AG
 
 | Setting | Resolution |
 |---|---|
-| Repository, base branch, worktree root | Inspect target repository and remote HEAD. Create the worktree with ~/.claude/bin/wt-create <branch> --base <ref>: it uses the sibling <repo>-worktrees/ directory, links ../solution and node_modules when the Makefile needs them, copies gitignored env files and runs the repo's own .claude/worktree-setup.sh when present. |
+| Repository, base branch, worktree root | Inspect target repository and remote HEAD. Create the worktree with ~/.claude/bin/wt-create <branch> --base <ref>: it uses the sibling <repo>-worktrees/ directory, links ../solution and node_modules when the Makefile needs them, copies gitignored env files runs the repo's own .claude/worktree-setup.sh and git config wt.setup when present, and links the main checkout's node_modules when the lockfile matches. |
 | Source/package roots and exclusions | Inspect tracked paths and workspace configuration, including generated/vendor exclusions. |
 | UI roots and design system | Tracked paths holding screens, components, styles and templates, plus the design system or component library they use. Used by the frontend-design pre-triage and named as the brief when it is on. |
 | Domain risks | Read applicable security, persistence, compatibility and deployment rules. |

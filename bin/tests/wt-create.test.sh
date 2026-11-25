@@ -68,6 +68,23 @@ git -C "$TMP/work/svc" config wt.setup 'exit 7'
 out=$("$BIN/wt-create" feat/setup-fails --repo "$TMP/work/svc" 2>&1); rc=$?
 if [ "$rc" = 0 ] && printf '%s' "$out" | grep -q 'wt.setup exited 7' && printf '%s' "$out" | tail -1 | grep -q '^WORKTREE '; then ok; else bad "a failing wt.setup warns, keeps the worktree and still prints WORKTREE" "rc=$rc $out"; fi
 git -C "$TMP/work/svc" config --unset wt.setup
+# A Node repo: the worktree reuses the main checkout's node_modules when the lockfile matches.
+mkdir -p "$TMP/work/web/node_modules"
+git -C "$TMP/work/web" init -q -b master
+printf '{"lockfileVersion":3}\n' > "$TMP/work/web/package-lock.json"
+printf 'node_modules\n.setup-ran\n' > "$TMP/work/web/.gitignore"
+git -C "$TMP/work/web" add -A; git -C "$TMP/work/web" -c user.email=t@e.invalid -c user.name=T -c commit.gpgsign=false commit -qm init
+out=$("$BIN/wt-create" feat/deps --repo "$TMP/work/web" --base master 2>&1); rc=$?
+if [ "$rc" = 0 ] && [ "$(readlink "$TMP/work/web-worktrees/feat-deps/node_modules")" = "$TMP/work/web/node_modules" ]; then ok; else bad "links node_modules when the lockfile matches" "rc=$rc $out"; fi
+out=$("$BIN/wt-create" feat/no-setup --repo "$TMP/work/web" --base master --no-setup 2>&1); rc=$?
+if [ "$rc" = 0 ] && [ ! -e "$TMP/work/web-worktrees/feat-no-setup/node_modules" ]; then ok; else bad "--no-setup skips the node_modules link" "rc=$rc $out"; fi
+printf '{"lockfileVersion":3,"changed":true}\n' > "$TMP/work/web/package-lock.json"
+out=$("$BIN/wt-create" feat/drift --repo "$TMP/work/web" --base master 2>&1); rc=$?
+if [ "$rc" = 0 ] && [ ! -e "$TMP/work/web-worktrees/feat-drift/node_modules" ] && printf '%s' "$out" | grep -q 'differs'; then ok; else bad "does not link node_modules when the lockfile differs" "rc=$rc $out"; fi
+git -C "$TMP/work/web" checkout -q -- package-lock.json
+git -C "$TMP/work/web" config wt.setup 'touch .setup-ran'
+out=$("$BIN/wt-create" feat/setup --repo "$TMP/work/web" --base master 2>&1); rc=$?
+if [ "$rc" = 0 ] && [ -f "$TMP/work/web-worktrees/feat-setup/.setup-ran" ] && [ ! -e "$TMP/work/web-worktrees/feat-setup/node_modules" ]; then ok; else bad "wt.setup runs and replaces the node_modules link" "rc=$rc $out"; fi
 cp -R "$TMP/work/svc" "/tmp/wtc-svc-$$"
 out=$("$BIN/wt-create" feat/y --repo "/tmp/wtc-svc-$$" 2>&1); rc=$?
 rm -rf "/tmp/wtc-svc-$$"
