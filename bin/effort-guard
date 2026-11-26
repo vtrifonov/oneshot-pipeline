@@ -19,8 +19,18 @@ A `p<N>` dispatch is denied when:
 
 `effort-guard: override <reason>` in the brief allows a different effort or an unflagged
 opus dispatch; it never excuses a missing `model` or `effort`. Exit 2 denies; stderr says why.
+
+It also checks the controller: the session that dispatches. The matrix runs it on `opus`
+(`medium` recommended), but the pipeline cannot set the session model, and a recommendation
+did not hold: to 2026-11-26, fable controllers ran 7-10 s per message against 5.2 s for opus
+at medium, one under a `no-fable` run option, and each recent Phase 0 over twice the lane
+median had one. So a `p<N>` dispatch is denied while the session's latest assistant entry
+ran on `fable`, or at `xhigh`/`max`. Once the user has explicitly kept that session
+setting, the controller creates CONTROLLER_OK_DIR/<session_id> and the check passes for
+that session.
 """
 import json
+import os
 import re
 import sys
 
@@ -28,6 +38,53 @@ PHASE = re.compile(r"^\s*p(\d{1,2})(?!\w)", re.I)
 OVERRIDE = re.compile(r"^\s*[-*]?\s*effort-guard:\s*override\s+\S", re.M | re.I)
 ESCALATED = re.compile(r"^\s*[-*]?\s*Escalated after:\s*\S", re.M | re.I)
 JUSTIFIED = re.compile(r"^\s*[-*]?\s*(Complexity risk|Escalated after):\s*\S", re.M | re.I)
+
+
+CONTROLLER_OK_DIR = os.environ.get("ONESHOT_CONTROLLER_OK_DIR", "/tmp/oneshot-controller-ok")
+TAIL_BYTES = 4 * 1024 * 1024
+HEAVY_EFFORTS = ("xhigh", "max")
+
+
+def controller_state(transcript_path):
+    """(model, effort) of the session's latest main-thread assistant entry; (None, None) if unknown."""
+    try:
+        with open(transcript_path, "rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            fh.seek(max(0, fh.tell() - TAIL_BYTES))
+            lines = fh.read().decode("utf-8", "replace").splitlines()
+    except (OSError, TypeError):
+        return None, None
+    for line in reversed(lines):
+        if '"assistant"' not in line:
+            continue
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        if entry.get("type") != "assistant" or entry.get("isSidechain"):
+            continue
+        model = ((entry.get("message") or {}).get("model") or "").lower()
+        return model or None, (entry.get("effort") or "").lower() or None
+    return None, None
+
+
+def check_controller(payload, description):
+    session = str(payload.get("session_id") or "")
+    if session and os.path.exists(os.path.join(CONTROLLER_OK_DIR, session)):
+        return
+    model, effort = controller_state(payload.get("transcript_path"))
+    problems = []
+    if model and "fable" in model:
+        problems.append(f"model `{model}`")
+    if effort in HEAVY_EFFORTS:
+        problems.append(f"effort `{effort}`")
+    if not problems:
+        return
+    deny(f"'{description}' is dispatched from a controller session on {' and '.join(problems)}. The model "
+         "matrix runs the controller on `opus` (`medium` recommended); the pipeline cannot switch it. Send a "
+         "PushNotification, then ask the user to run `/model opus` and `/effort medium` and retry this "
+         "dispatch. Only if the user explicitly keeps the current setting: record that in timeline.txt and run "
+         f"`mkdir -p {CONTROLLER_OK_DIR} && touch {CONTROLLER_OK_DIR}/{session or '<session_id>'}`.")
 
 
 def expected_effort(phase, description, model):
@@ -64,6 +121,7 @@ def main():
     if not match:
         return
     phase = int(match.group(1))
+    check_controller(payload, description)
     model = (inp.get("model") or "").lower()
     effort = (inp.get("effort") or "").lower()
     prompt = inp.get("prompt") or ""

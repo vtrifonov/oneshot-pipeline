@@ -12,12 +12,12 @@ mtime):
 
 | File | One row per | Joined from |
 |---|---|---|
-| `runs.json` | run | `runs/<folder>/run-summary.json`, the `metrics.csv` row (by PR number, else by Jira key in the run id), step totals, the ledger's accepted B/M/m, `metrics_quality_notes` failure classes, papercuts on the same date and project |
-| `steps.json` | step-metrics row (phase, controller, inline, agent, task, total) | `runs/<folder>/step-metrics.json`, else that run's rows in `step-metrics.csv`; plus `run_id`, `lane`, `mode`, `date`. Rows reported since 2026-10-28 also carry `effort`, `thinking_tokens`, `thinking_s` and `latency_s`; since 2026-11-03 `phase_basis` (`prefix`: the dispatch description's `pN` set the phase; `mark`: the phase mark active at the time did) |
-| `reviews.json` | reviewer pass | `review-runs.jsonl`, with `reported`/`accepted` parsed to `[B, M, m]` and `accepted_bm`; `effort` and `thinking_tokens` when the skeleton carried them |
+| `runs.json` | run | `runs/<folder>/run-summary.json` (or a multi-PR run's per-PR `run-summary-pr<n>.json` files, merged: run-level fields from the first, every PR in `prs`, every quality note), the `metrics.csv` row (by PR number, else by Jira key in the run id; a multi-PR run's other PRs' rows go to `csv_more`), step totals, the ledger's accepted B/M/m, `metrics_quality_notes` failure classes, papercuts on the same date and project |
+| `steps.json` | step-metrics row (phase, controller, inline, agent, task, total) | `runs/<folder>/step-metrics.json`, else that run's rows in `step-metrics.csv`; plus `run_id`, `lane`, `mode`, `date`. Rows reported since 2026-10-28 also carry `effort`, `thinking_tokens`, `thinking_s` and `latency_s`; since 2026-11-03 `phase_basis` (`prefix`: the dispatch description's `pN` set the phase; `mark`: the phase mark active at the time did); since 2026-11-26 `pr`, the PR index of a multi-PR run's phase track (`mark … phase N --pr K`, or `PRk` in a dispatch description), empty for run-level rows |
+| `reviews.json` | reviewer pass | `review-runs.jsonl`, with `reported`/`accepted` parsed to `[B, M, m]` and `accepted_bm`; `lens` normalised to `<stage>:<scope>` (`code:correctness-testing`, `spec:security`, `code:recheck`, …) and the ledger's spelling kept in `lens_raw`; `effort` and `thinking_tokens` when the skeleton carried them |
 
 A run with artifacts in a target repository is copied into `runs/<run_id>/` first (the four
-artifact files only, and only when the source is newer; `.source` records where it came from). The
+artifact files and any per-PR run summaries only, and only when the source is newer; `.source` records where it came from). The
 places to look are globs in `<skill-dir>/rollup-sources.local.json`, per machine and gitignored:
 
 ```json
@@ -110,5 +110,11 @@ unavailable in the session; the tables are still rebuilt locally.
 - The ledger's accepted B/M/m counts every `accepted-*` disposition (`accepted-cheap`, `accepted-spec-amend`,
   `accepted-departure`, ...); before 2026-11-03 only the bare `accepted` counted, so older rollups
   under-reported runs that used the variants.
-- Lens names are free text from the ledger; the same scope can appear under two spellings until the
-  review-runs writer normalises them.
+- Lens names are normalised at rollup to `<stage>:<scope>`, with rechecks as `<stage>:recheck`, so a
+  dry streak counts one scope across every spelling. Rows whose phase was missing land under
+  `other:`. The ledger's own spelling stays in `lens_raw`.
+- Multi-PR runs marked per PR (since 2026-11-26) have one phase row per (phase, PR), so the lane medians
+  compare one PR's Phase 7 with another's; older multi-PR runs have one row for all PRs and inflate
+  the medians they join.
+- Before 2026-11-26, a multi-PR run's per-PR summaries were not read: its other PRs showed as separate
+  `csv-…` rows, and the run count was about 80 higher.

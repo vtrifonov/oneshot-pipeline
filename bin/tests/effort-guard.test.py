@@ -1,21 +1,80 @@
 """effort-guard: pipeline dispatches carry the model-matrix model and effort."""
 import json
+import os
 from pathlib import Path
 import subprocess
+import tempfile
 import unittest
 
 BIN = Path(__file__).resolve().parents[1]
 
 
-def run_hook(description, model=None, effort=None, prompt="brief", tool="Agent"):
+def run_hook(description, model=None, effort=None, prompt="brief", tool="Agent", extra=None, env=None):
     tool_input = {"description": description, "prompt": prompt}
     if model:
         tool_input["model"] = model
     if effort:
         tool_input["effort"] = effort
-    payload = {"tool_name": tool, "tool_input": tool_input}
+    payload = {"tool_name": tool, "tool_input": tool_input, **(extra or {})}
     return subprocess.run(["python3", str(BIN / "effort-guard")], input=json.dumps(payload),
-                          text=True, capture_output=True)
+                          text=True, capture_output=True, env=env)
+
+
+def transcript(path, *entries):
+    lines = [{"type": "user", "message": {"role": "user", "content": "go"}}]
+    for model, effort, sidechain in entries:
+        lines.append({"type": "assistant", "isSidechain": sidechain, "effort": effort,
+                      "message": {"model": model, "role": "assistant", "content": []}})
+    path.write_text("".join(json.dumps(line) + "\n" for line in lines))
+    return str(path)
+
+
+class ControllerCheckTest(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name)
+        self.env = {**os.environ, "ONESHOT_CONTROLLER_OK_DIR": str(self.root / "ok")}
+
+    def tearDown(self):
+        self.temporary.cleanup()
+
+    def dispatch(self, *entries, description="p3 spec-security review"):
+        path = transcript(self.root / "session.jsonl", *entries)
+        return run_hook(description, model="opus", effort="medium", env=self.env,
+                        extra={"transcript_path": path, "session_id": "s-1"})
+
+    def test_opus_controller_at_medium_or_high_passes(self):
+        for effort in ("medium", "high"):
+            result = self.dispatch(("claude-opus-5-5", effort, False))
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_fable_controller_is_denied_with_the_fix(self):
+        result = self.dispatch(("claude-fable-5-2", "medium", False))
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("model `claude-fable-5-2`", result.stderr)
+        self.assertIn("/model opus", result.stderr)
+        self.assertIn(str(self.root / "ok" / "s-1"), result.stderr)
+
+    def test_xhigh_controller_is_denied(self):
+        result = self.dispatch(("claude-opus-5-5", "xhigh", False))
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("effort `xhigh`", result.stderr)
+
+    def test_the_latest_main_thread_entry_decides(self):
+        # Switched from fable to opus; a later fable subagent entry is not the controller.
+        result = self.dispatch(("claude-fable-5-2", "xhigh", False), ("claude-opus-5-5", "medium", False),
+                               ("claude-fable-5-2", "high", True))
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_user_acceptance_file_lets_the_session_through(self):
+        (self.root / "ok").mkdir()
+        (self.root / "ok" / "s-1").touch()
+        result = self.dispatch(("claude-fable-5-2", "xhigh", False))
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_non_pipeline_dispatch_is_not_checked(self):
+        result = self.dispatch(("claude-fable-5-2", "xhigh", False), description="Recon the request forms")
+        self.assertEqual(result.returncode, 0, result.stderr)
 
 
 class EffortGuardTest(unittest.TestCase):

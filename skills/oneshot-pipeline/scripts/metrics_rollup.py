@@ -30,6 +30,7 @@ import shutil
 import statistics
 
 ARTIFACTS = ("run-summary.json", "review-runs.jsonl", "review-ledger.jsonl", "step-metrics.json")
+SUMMARY_PART_RE = re.compile(r"^run-summary[-.][^/]+\.json$")
 GENERIC_DIRS = {"reviews", "run", "superpowers", "docs", "runs", "artifacts"}
 ROLLUP_DIR = "_rollup"
 MAX_TABLE_BYTES = 8 * 1024 * 1024
@@ -48,6 +49,20 @@ FAILURE_CLASSES = {
     "hook_denials": re.compile(r"hook (denied|denial|blocked)|denied by (the )?\w*-?guard|guard denied", re.I),
     "backfilled_metrics": re.compile(r"backfill", re.I),
 }
+LENS_STAGES = {"1": "design", "3": "spec", "4": "plan", "5": "plan", "6": "task", "7": "code", "8": "pre-pr",
+               "9": "bot", "10": "bot", "11": "bot"}
+LENS_SCOPES = (
+    ("security", re.compile(r"secur|trust|auth|exposure|privacy|\bpii\b")),
+    ("requirements-architecture", re.compile(r"requirement|architect|\barch\b|intent|scope|consisten")),
+    ("data-persistence", re.compile(r"\bdata\b|persist|firestore|migrat|\bsql\b|\bdb\b|schema|backfill")),
+    ("concurrency", re.compile(r"concurren|idempot|\brace\b|\bstate\b|retry")),
+    ("api-compat", re.compile(r"compat|contract|\bapi\b|runtime")),
+    ("devops-rollout", re.compile(r"devops|rollout|deploy|infra|\bops\b|recovery")),
+    ("frontend-ux", re.compile(r"front|\bux\b|\bui\b|accessib|a11y")),
+    ("implementation-testing", re.compile(r"implement|coverage|test|verif|execution|correct")),
+)
+RECHECK_RE = re.compile(r"re-?check|re-?review")
+LENS_NOISE_RE = re.compile(r"\([^)]*\)|\bpr\s*\d+\w*|\b(spec|plan|code|task|review|pass|lens)\b")
 RETRO_PHASE_FACTOR = 2.0
 RETRO_PHASE_FLOOR = {"wall_s": 120, "output": 5000}  # a 20s phase at 2x its 6s median is noise
 RETRO_LENS_PASSES = 5
@@ -153,6 +168,47 @@ def digit_groups(value):
     return set(DIGITS_RE.findall(str(value))) if value not in (None, "") else set()
 
 
+def lens_slug(text):
+    slug = re.sub(r"[^a-z0-9]+", "-", LENS_NOISE_RE.sub(" ", text)).strip("-")
+    return slug or "unknown"
+
+
+def canonical_lens(raw, phase=None, pass_kind=None):
+    """One spelling per review scope: '<stage>:<scope>', e.g. 'code:correctness-testing'.
+
+    The ledger's lens names are free text ('correctness/testing', 'code review: pr2
+    correctness/testing', 'p7 PR1 correctness-testing review'), so the dry-streak and
+    yield views split one scope across many rows. Rechecks get their own scope, so a
+    recheck that confirms a fix does not count against the lens that found it.
+    """
+    text = (raw or "").strip().lower()
+    digits = re.match(r"\D*(\d{1,2})", str(phase or ""))
+    stage = LENS_STAGES.get(digits.group(1) if digits else "", "other")
+    if pass_kind == "recheck" or RECHECK_RE.search(text):
+        return f"{stage}:recheck"
+    if stage == "task":
+        return "task:review"
+    if stage == "pre-pr":
+        for name in ("aie", "codex"):
+            if name in text:
+                return f"pre-pr:{name}"
+        return f"pre-pr:{lens_slug(text.replace('pre-pr', ''))}"
+    if stage == "bot":
+        return "bot:ai-review" if re.search(r"\bbot\b|ai-?(pr-?)?review", text) else f"bot:{lens_slug(text)}"
+    if stage == "code":
+        security = re.search(r"secur|architect|\barch\b", text)
+        correctness = re.search(r"correct|test", text)
+        if "combined" in text or (security and correctness):
+            return "code:combined"
+        if security:
+            return "code:security-architecture"
+        if correctness:
+            return "code:correctness-testing"
+        return f"code:{lens_slug(text)}"
+    hits = [(m.start(), name) for name, pattern in LENS_SCOPES for m in [pattern.search(text)] if m]
+    return f"{stage}:{min(hits)[1] if hits else lens_slug(text)}"
+
+
 def write_if_changed(path, payload):
     """Write JSON only when the serialized content differs, so reruns leave mtimes alone."""
     text = json.dumps(payload, indent=1, sort_keys=True) + "\n"
@@ -167,14 +223,51 @@ def write_if_changed(path, payload):
 # ------------------------------------------------------------- discovery
 
 def artifact_files(run_dir):
-    """Map artifact name -> path, looking in the dir and its reviews/ and run/ children."""
+    """Map artifact name -> path, looking in the dir and its reviews/ and run/ children.
+
+    A multi-PR run writes one summary per PR (run-summary-pr3977.json, run-summary.pr1.json,
+    run-summary-<repo>-<pr>.json); each is kept under its own name.
+    """
     found = {}
+    homes = (run_dir, run_dir / "reviews", run_dir / "run")
     for name in ARTIFACTS:
-        for candidate in (run_dir / name, run_dir / "reviews" / name, run_dir / "run" / name):
+        for candidate in (home / name for home in homes):
             if candidate.is_file():
                 found[name] = candidate
                 break
+    for home in homes:
+        for candidate in sorted(home.glob("run-summary?*.json")) if home.is_dir() else []:
+            if SUMMARY_PART_RE.match(candidate.name) and candidate.name not in found:
+                found[candidate.name] = candidate
     return found
+
+
+def summary_parts(files):
+    """The run's summaries, run-summary.json first, then the per-PR ones in PR order."""
+    parts = []
+    for name in sorted(files):
+        if name == "run-summary.json" or SUMMARY_PART_RE.match(name):
+            data = read_json(files[name])
+            if isinstance(data, dict):
+                parts.append((name != "run-summary.json", to_int(data.get("pr_index")) or 0, name, data))
+    return [data for *_, data in sorted(parts, key=lambda p: p[:3])]
+
+
+def merged_summary(files):
+    """(summary, prs): run-level fields from the first summary; every PR and quality note."""
+    parts = summary_parts(files)
+    if not parts:
+        return {}, []
+    merged = dict(parts[0])
+    prs, notes = [], []
+    for part in parts:
+        if part.get("pr") not in (None, "") and part["pr"] not in prs:
+            prs.append(part["pr"])
+        for note in part.get("metrics_quality_notes") or []:
+            if note not in notes:
+                notes.append(note)
+    merged["metrics_quality_notes"] = notes
+    return merged, prs
 
 
 def external_run_dirs(home):
@@ -197,8 +290,8 @@ def fallback_run_id(run_dir):
 
 
 def run_id_for(run_dir, files):
-    summary = read_json(files["run-summary.json"]) if "run-summary.json" in files else None
-    if isinstance(summary, dict) and summary.get("run_id"):
+    summary, _ = merged_summary(files)
+    if summary.get("run_id"):
         return str(summary["run_id"])
     return fallback_run_id(run_dir)
 
@@ -369,8 +462,7 @@ def step_totals(rows):
 # ----------------------------------------------------------------- build
 
 def build_run(run_dir, files, step_csv):
-    summary = read_json(files["run-summary.json"]) if "run-summary.json" in files else {}
-    summary = summary if isinstance(summary, dict) else {}
+    summary, prs = merged_summary(files)
     run_id = str(summary.get("run_id") or fallback_run_id(run_dir))
     steps = None
     if "step-metrics.json" in files:
@@ -405,6 +497,7 @@ def build_run(run_dir, files, step_csv):
         "impl_mode": summary.get("impl_mode"),
         "status": summary.get("status"),
         "pr": summary.get("pr"),
+        "prs": prs,
         "jira": jira_of(run_id, run_dir.name),
         "policy_version": summary.get("policy_version"),
         "has_summary": bool(summary),
@@ -457,9 +550,18 @@ def normalise_csv(csv_row):
     return out
 
 
+def extra_pr_matches(run, csv_rows, used):
+    """The metrics.csv rows of a multi-PR run's other PRs (matched by PR number only)."""
+    run_prs = set().union(*(digit_groups(pr) for pr in run.get("prs") or []))
+    if len(run.get("prs") or []) < 2:
+        return []
+    return [i for i, csv_row in enumerate(csv_rows)
+            if i not in used and run_prs & digit_groups(csv_row.get("pr"))]
+
+
 def match_csv(run, csv_rows, used):
     """Join a run to one metrics.csv row by PR number, else by Jira key."""
-    run_prs = digit_groups(run.get("pr"))
+    run_prs = digit_groups(run.get("pr")).union(*(digit_groups(pr) for pr in run.get("prs") or []))
     for i, csv_row in enumerate(csv_rows):
         if i in used:
             continue
@@ -490,11 +592,13 @@ def attach_papercuts(runs, papercuts):
 def review_row(rec, run):
     reported = parse_bmm(rec.get("reported_bmm"))
     accepted = parse_bmm(rec.get("unique_accepted_bmm"))
-    lens = (rec.get("lens") or rec.get("reviewer_id") or "unknown").strip().lower()
+    raw = (rec.get("lens") or rec.get("reviewer_id") or "unknown").strip().lower()
+    phase = str(rec.get("phase")) if rec.get("phase") is not None else None
     return {
         "run_id": run["run_id"], "date": run["date"], "lane": run["lane"], "mode": run["mode"],
-        "phase": str(rec.get("phase")) if rec.get("phase") is not None else None,
-        "reviewer_id": rec.get("reviewer_id"), "lens": lens, "pass_kind": rec.get("pass_kind"),
+        "phase": phase, "reviewer_id": rec.get("reviewer_id"),
+        "lens": canonical_lens(raw, phase, rec.get("pass_kind")), "lens_raw": raw,
+        "pass_kind": rec.get("pass_kind"),
         "started_at": rec.get("started_at"), "elapsed_seconds": to_int(rec.get("elapsed_seconds")),
         "tokens": to_int(rec.get("tokens")), "output_tokens": to_int(rec.get("output_tokens")),
         "effort": rec.get("effort") or None, "thinking_tokens": to_int(rec.get("thinking_tokens")),
@@ -553,6 +657,9 @@ def cmd_rollup(args):
             run["lane"] = run["lane"] or csv_rows[index].get("lane")
             run["mode"] = run["mode"] or csv_rows[index].get("mode")
             run["impl_mode"] = run["impl_mode"] or csv_rows[index].get("impl_mode")
+            more = extra_pr_matches(run, csv_rows, used)
+            used.update(more)
+            run["csv_more"] = [normalise_csv(csv_rows[i]) for i in more]
     for run, rows, passes in pending:
         for row in rows:
             steps.append({**row, "run_id": run["run_id"], "lane": run["lane"], "mode": run["mode"],
@@ -853,7 +960,8 @@ def retro_candidates(tables):
             if median and value > RETRO_PHASE_FACTOR * median and value >= RETRO_PHASE_FLOOR[key]:
                 fmt = fmt_s if key.endswith("_s") else fmt_k
                 out.append({"rule": f"phase over 2x lane median ({key})", "run_id": row["run_id"],
-                            "detail": f"phase {row['phase']} {key} {fmt(value)} vs median {fmt(median)} "
+                            "detail": f"phase {row['phase']}{' PR' + str(row['pr']) if row.get('pr') else ''} "
+                                      f"{key} {fmt(value)} vs median {fmt(median)} "
                                       f"for lane {row['lane']}"})
     for stat in lens_stats(tables["reviews"]):
         if stat["measured"] >= RETRO_LENS_PASSES and stat["passes_since_accepted"] >= RETRO_LENS_PASSES:

@@ -172,13 +172,46 @@ class ReportTest(unittest.TestCase):
         self.assertEqual(skeleton[0]["effort"], "high")
         self.assertEqual(skeleton[0]["thinking_tokens"], 300)
 
+    def test_pr_marks_give_each_pr_its_own_phase_track(self):
+        # Run-level 0 and 6, then PR 1 enters 7 at :30 and 10 at :50 while PR 2 enters 6 at 1:00.
+        (self.marks / "marks.tsv").write_text(
+            f"{T0}00Z\tphase\t0\n{T0}20Z\tphase\t6\n{T0}30Z\tphase\t7\tpr=1\n{T0}50Z\tphase\t10\tpr=1\n"
+            "2026-10-20T10:01:00Z\tphase\t6\tpr=2\n2026-10-20T10:01:50Z\tdone\n")
+        agent_dir = self.config / "projects" / "-proj" / "session-1" / "subagents"
+        (agent_dir / "agent-r1.meta.json").write_text(json.dumps(
+            {"description": "p7 PR1 correctness/testing review", "name": "general-purpose", "spawnDepth": 1}))
+        (agent_dir / "agent-a1.meta.json").write_text(json.dumps(
+            {"description": "p6 PR3 T1 implementer", "name": "general-purpose", "spawnDepth": 1}))
+        out, all_rows = self.report()
+        phases = {(r["phase"], r["pr"]): r for r in all_rows if r["kind"] == "phase"}
+        self.assertEqual(phases[("6", "")]["wall_s"], 10)     # run-level: ends at the next mark of any PR
+        self.assertEqual(phases[("7", "1")]["wall_s"], 20)    # :30 -> PR 1's next mark at :50
+        self.assertEqual(phases[("10", "1")]["wall_s"], 60)   # :50 -> done; PR 2's mark does not end it
+        self.assertEqual(phases[("6", "2")]["wall_s"], 50)    # 1:00 -> done
+        self.assertEqual(phases[("7", "1")]["step"], "phase 7 PR1")
+        self.assertEqual(phases[("7", "1")]["output"], 800)   # the PR1 reviewer
+        self.assertEqual((phases[("6", "3")]["wall_s"], phases[("6", "3")]["output"]), ("", 1000))
+        self.assertIn("['6 PR3']", out)
+        self.assertIn("phase <N> --pr <K>", out)
+        skeleton = [json.loads(line) for line in (self.marks / "review-runs.skeleton.jsonl").read_text().splitlines()]
+        self.assertEqual(skeleton[0]["lens"], "code:correctness-testing")
+
+    def test_pr_flag_writes_the_mark(self):
+        result = subprocess.run(["python3", str(SCRIPT), "mark", self.slug, "phase", "7", "--pr", "2"],
+                                env=self.env, text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue((self.marks / "marks.tsv").read_text().rstrip().endswith("\tphase\t7\tpr=2"))
+        bad = subprocess.run(["python3", str(SCRIPT), "mark", self.slug, "start", "p8-gates", "--pr", "2"],
+                             env=self.env, text=True, capture_output=True)
+        self.assertNotEqual(bad.returncode, 0)
+
     def test_csv_carries_the_new_columns(self):
         csv_path = Path(self.temporary.name) / "step-metrics.csv"
         result = subprocess.run(["python3", str(SCRIPT), "report", self.slug, "--csv", str(csv_path),
                                  "--run-id", "rm-test"], env=self.env, text=True, capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         header = csv_path.read_text().splitlines()[0].split(",")
-        for column in ("effort", "thinking_tokens", "thinking_s", "latency_s", "phase_basis"):
+        for column in ("effort", "thinking_tokens", "thinking_s", "latency_s", "phase_basis", "pr"):
             self.assertIn(column, header)
 
 

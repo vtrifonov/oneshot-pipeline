@@ -181,9 +181,9 @@ class RollupTest(unittest.TestCase):
         reviews = self.table("reviews")
         self.assertEqual(len(reviews), 4)
         by_lens = {(r["run_id"], r["lens"]): r for r in reviews}
-        self.assertEqual(by_lens[("ab-1001-widgets", "requirements/architecture")]["accepted_bm"], 2)
-        self.assertEqual(by_lens[("ab-1003-gadgets", "security")]["accepted_bm"], 0)
-        self.assertEqual(by_lens[("ab-1003-gadgets", "security")]["lane"], "full")
+        self.assertEqual(by_lens[("ab-1001-widgets", "spec:requirements-architecture")]["accepted_bm"], 2)
+        self.assertEqual(by_lens[("ab-1003-gadgets", "spec:security")]["accepted_bm"], 0)
+        self.assertEqual(by_lens[("ab-1003-gadgets", "spec:security")]["lane"], "full")
 
     def test_rerun_changes_nothing_and_copies_only_newer(self):
         self.rollup()
@@ -217,13 +217,13 @@ class RollupTest(unittest.TestCase):
         self.assertEqual(one.returncode, 0, one.stderr)
         self.assertIn("acme/widgets", one.stdout)
         self.assertIn("T2 (p6 T1-2 implementer)", one.stdout)
-        self.assertIn("requirements/architecture", one.stdout)
+        self.assertIn("spec:requirements-architecture", one.stdout)
         self.assertIn("note: one stopped duplicate", one.stdout)
         lenses = self.run_metrics("show", "--lenses")
         self.assertEqual(lenses.returncode, 0, lenses.stderr)
         # Columns: passes, measured, unknown, from ledger, runs, tokens, meas tok, out, acc B+M, B+M/Mtok, dry streak.
-        self.assertRegex(lenses.stdout, r"requirements/architecture\s+2\s+2\s+0\s+0\s+2\s+2\.0M\s+2\.0M\s+40k\s+3\s+1\.50\s+0")
-        self.assertRegex(lenses.stdout, r"security\s+2\s+2\s+0\s+0\s+2\s+2\.0M\s+2\.0M\s+40k\s+0\s+0\.00\s+2")
+        self.assertRegex(lenses.stdout, r"spec:requirements-architecture\s+2\s+2\s+0\s+0\s+2\s+2\.0M\s+2\.0M\s+40k\s+3\s+1\.50\s+0")
+        self.assertRegex(lenses.stdout, r"spec:security\s+2\s+2\s+0\s+0\s+2\s+2\.0M\s+2\.0M\s+40k\s+0\s+0\.00\s+2")
         failures = self.run_metrics("show", "--failures")
         self.assertIn("cwdx1, installx1", failures.stdout)
         effort = self.run_metrics("show", "--effort")
@@ -271,13 +271,67 @@ class RollupTest(unittest.TestCase):
         self.rollup()
         retro = self.run_metrics("show", "--retro")
         self.assertIn("lens dry for 5+ passes", retro.stdout)
-        self.assertIn("devops: 6 measured passes", retro.stdout)
+        self.assertIn("spec:devops-rollout: 6 measured passes", retro.stdout)
+
+    def test_multi_pr_summaries_join_every_pr_row(self):
+        run = self.runs / "ab-1005-multi"
+        run.mkdir()
+        for index, pr in ((1, 61), (2, 62)):
+            (run / f"run-summary-pr{pr}.json").write_text(json.dumps({
+                "run_id": "ab-1005-multi", "pr": pr, "pr_index": index, "lane": "full", "mode": "standard",
+                "approved_at": "2026-10-05T09:00:00Z", "metrics_quality_notes": [f"pr{pr} note", "shared note"]}))
+        write_jsonl(run / "review-runs.jsonl", [review("ab-1005-multi", "p7 PR1 correctness-testing review",
+                                                       "0/1/0", phase="7", started="2026-10-05T10:00:00Z")])
+        with (self.home / "metrics.csv").open("a") as fh:
+            fh.write("2026-10-06,61,AB-1005,full,standard,sdd,1,1,0/0/0,0/0/0,0/1/0,1,0,0,0,3,90,0,\n"
+                     "2026-10-06,62,AB-1005,full,standard,sdd,1,1,0/0/0,0/0/0,0/0/1,0,0,0,0,2,40,0,\n")
+        self.rollup()
+        runs = {r["run_id"]: r for r in self.table("runs")}
+        self.assertNotIn("csv-2026-10-06-AB-1005", runs)
+        multi = runs["ab-1005-multi"]
+        self.assertEqual(multi["prs"], [61, 62])
+        self.assertEqual(multi["pr"], 61)
+        self.assertEqual(multi["csv"]["pr"], "61")
+        self.assertEqual([c["pr"] for c in multi["csv_more"]], ["62"])
+        self.assertEqual(multi["metrics_quality_notes"], ["pr61 note", "shared note", "pr62 note"])
+        self.assertEqual([r["lens"] for r in self.table("reviews") if r["run_id"] == "ab-1005-multi"],
+                         ["code:correctness-testing"])
 
     def test_bad_sources_file_is_an_error(self):
         self.sources.write_text(json.dumps(["not", "an", "object"]))
         result = self.run_metrics("rollup", "--papercuts", str(self.papercuts))
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("run_dirs", result.stderr)
+
+
+class CanonicalLensTest(unittest.TestCase):
+    def test_spellings_of_one_scope_collapse(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("metrics_rollup", SCRIPT.parent / "metrics_rollup.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        cases = [
+            ("correctness/testing", "7", None, "code:correctness-testing"),
+            ("code review: pr2 correctness/testing", "7", None, "code:correctness-testing"),
+            ("p7 PR1 security-architecture review", "7", None, "code:security-architecture"),
+            ("code review: pr5 combined correctness+security", "7", None, "code:combined"),
+            ("code recheck (fix round)", "7", None, "code:recheck"),
+            ("security", "7", "recheck", "code:recheck"),
+            ("requirements/architecture", "3", None, "spec:requirements-architecture"),
+            ("spec: security/trust-boundary", "3", None, "spec:security"),
+            ("requirements-architecture + api/auth", "3", None, "spec:requirements-architecture"),
+            ("api compatibility + rollout gate", "3", None, "spec:api-compat"),
+            ("plan: implementation/test coverage", "5", None, "plan:implementation-testing"),
+            ("plan: security/execution", "5", None, "plan:security"),
+            ("task review (complex task)", "6", None, "task:review"),
+            ("pre-pr aie", "8", None, "pre-pr:aie"),
+            ("codex-pre-pr", "8", None, "pre-pr:codex"),
+            ("ai-pr-review", "10-shepherd", None, "bot:ai-review"),
+            ("widget wrangling", "3", None, "spec:widget-wrangling"),
+        ]
+        for raw, phase, kind, want in cases:
+            with self.subTest(raw=raw):
+                self.assertEqual(module.canonical_lens(raw, phase, kind), want)
 
 
 if __name__ == "__main__":
