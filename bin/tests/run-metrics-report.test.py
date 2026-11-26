@@ -196,6 +196,34 @@ class ReportTest(unittest.TestCase):
         skeleton = [json.loads(line) for line in (self.marks / "review-runs.skeleton.jsonl").read_text().splitlines()]
         self.assertEqual(skeleton[0]["lens"], "code:correctness-testing")
 
+    def test_controller_edits_in_phase_10_are_a_note(self):
+        (self.marks / "marks.tsv").write_text(
+            f"{T0}00Z\tphase\t0\n{T0}20Z\tphase\t6\n{T0}55Z\tphase\t10\n2026-10-20T10:01:50Z\tdone\n")
+        artifacts = Path(self.temporary.name) / "durable"
+
+        def edit(ts, msg_id, name, target):
+            entry = assistant(ts, msg_id, "claude-opus-5-5", 10, 0, "medium", f"req-{msg_id}", 0)
+            entry["message"]["content"] = [{"type": "tool_use", "id": f"tu-{msg_id}", "name": name,
+                                            "input": {"file_path": target}}]
+            return entry
+
+        session = self.config / "projects" / "-proj" / "session-1.jsonl"
+        with session.open("a") as fh:
+            for entry in [
+                edit(f"{T0}30Z", "e1", "Edit", "/work/repo/src/Early.ts"),             # Phase 6: not counted
+                edit("2026-10-20T10:01:00Z", "e2", "Edit", "/work/repo/src/Fix.ts"),
+                edit("2026-10-20T10:01:01Z", "e3", "Edit", "/work/repo/src/Fix.ts"),
+                edit("2026-10-20T10:01:02Z", "e4", "Write", "/work/repo/src/Fix.spec.ts"),
+                edit("2026-10-20T10:01:03Z", "e5", "Write", f"/tmp/{self.slug}/wave-1.md"),
+                edit("2026-10-20T10:01:04Z", "e6", "Edit", str(artifacts / "review-ledger.jsonl")),
+            ]:
+                fh.write(json.dumps(entry) + "\n")
+        out, _ = self.report("--artifacts", str(artifacts))
+        self.assertIn("controller edited 2 files inline in Phase 10 (3 edits: Fix.spec.ts, Fix.ts)", out)
+        self.assertNotIn("Early.ts", out)
+        self.assertNotIn("wave-1.md", out)
+        self.assertNotIn("review-ledger", out)
+
     def test_pr_flag_writes_the_mark(self):
         result = subprocess.run(["python3", str(SCRIPT), "mark", self.slug, "phase", "7", "--pr", "2"],
                                 env=self.env, text=True, capture_output=True)

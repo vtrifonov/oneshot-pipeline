@@ -66,6 +66,10 @@ Also writes /tmp/<slug>/review-runs.skeleton.jsonl: one review-policy record
 per agent whose description names a review or recheck, with time and tokens
 filled and the finding fields null for the controller to fill from the
 ledger. With --artifacts DIR, a missing DIR/review-runs.jsonl is a note.
+
+A file the controller itself edited during Phase 10 is a note too, unless it is
+run bookkeeping (scratch paths, Claude config, the --artifacts directory):
+Phase 10 fixes belong to a pr-shepherd.
 """
 import re
 import argparse
@@ -98,6 +102,8 @@ REVIEW_STEP = re.compile(r"review|recheck", re.IGNORECASE)
 PHASE_PREFIX = re.compile(r"^p(\d{1,2})\b")
 # The PR index in a description ("p6 PR2 T3/8 implementer"); "PR 23712" is a PR number, not an index.
 PR_INDEX = re.compile(r"\bPR(\d{1,2})\b")
+EDIT_TOOLS = ("Edit", "MultiEdit", "Write", "NotebookEdit")
+BOOKKEEPING_PATHS = ("/tmp/", "/private/tmp/", "/var/folders/", "/private/var/folders/")
 
 
 def now_iso():
@@ -243,9 +249,10 @@ def typed_by_human(text):
     return not text.lstrip().startswith(NOT_TYPED_PREFIXES)
 
 
-def read_transcript(path, start, end, skip_sidechain):
+def read_transcript(path, start, end, skip_sidechain, edits=None):
     """Return (messages, events). messages: one per API message id, in time order.
-    events: (ts, role, is_human) for every entry, used for wait/idle gaps."""
+    events: (ts, role, is_human) for every entry, used for wait/idle gaps.
+    edits, when given, collects (ts, file path) for every file-editing tool call."""
     by_id = {}
     events = []
     ask_ids = set()
@@ -272,8 +279,15 @@ def read_transcript(path, start, end, skip_sidechain):
             content = message.get("content")
             if entry["type"] == "assistant":
                 for block in content if isinstance(content, list) else []:
-                    if block.get("type") == "tool_use" and block.get("name") == "AskUserQuestion":
+                    if block.get("type") != "tool_use":
+                        continue
+                    if block.get("name") == "AskUserQuestion":
                         ask_ids.add(block.get("id"))
+                    elif edits is not None and block.get("name") in EDIT_TOOLS:
+                        tool_input = block.get("input") or {}
+                        target = tool_input.get("file_path") or tool_input.get("notebook_path")
+                        if target:
+                            edits.append((ts, target))
                 events.append((ts, "assistant", False))
                 msg_id = message.get("id")
                 model = message.get("model") or "unknown"
@@ -333,6 +347,16 @@ def find_sessions(slug, start):
         except OSError:
             continue
     return sessions
+
+
+def is_bookkeeping(target, artifacts):
+    """A run file the controller may edit in any phase: scratch, Claude config, durable artifacts."""
+    resolved = os.path.realpath(os.path.expanduser(target))
+    if target.startswith(BOOKKEEPING_PATHS) or resolved.startswith(BOOKKEEPING_PATHS):
+        return True
+    if "/.claude" in resolved:
+        return True
+    return bool(artifacts) and resolved.startswith(os.path.realpath(os.path.expanduser(artifacts)) + os.sep)
 
 
 def phase_at(phase_marks, ts):
@@ -449,10 +473,11 @@ def cmd_report(args):
 
     controller_msgs = []
     controller_events = []
+    controller_edits = []
     agents = []
     reviews = []
     for session in sessions:
-        messages, events = read_transcript(session, start, end, skip_sidechain=True)
+        messages, events = read_transcript(session, start, end, skip_sidechain=True, edits=controller_edits)
         controller_msgs.extend(messages)
         controller_events.extend(events)
         for agent_path in sorted((session.parent / session.stem / "subagents").glob("agent-*.jsonl")):
@@ -564,6 +589,13 @@ def cmd_report(args):
     unphased = [p for p in phase_tokens if p not in seen_phases]
     if unphased:
         notes.append(f"tokens outside any phase mark: {unphased}")
+    inline_fixes = [target for ts, target in controller_edits
+                    if phase_at(phase_marks, ts)[0] == "10" and not is_bookkeeping(target, args.artifacts)]
+    if inline_fixes:
+        files = sorted({pathlib.Path(target).name for target in inline_fixes})
+        shown = ", ".join(files[:5]) + (", ..." if len(files) > 5 else "")
+        notes.append(f"controller edited {len(files)} files inline in Phase 10 ({len(inline_fixes)} edits: {shown}); "
+                     "Phase 10 fixes go to a pr-shepherd (reference/phase-10-shepherd.md)")
     grand = empty_tokens()
     for tokens in phase_tokens.values():
         add_tokens(grand, tokens)
